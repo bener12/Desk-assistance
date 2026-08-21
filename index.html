@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lead Desk</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+const INK = "#1E2530";
+const PAPER = "#F2EEE3";
+const BRASS = "#9C7A32";
+const RISK = "#9C3B3B";
+const CAUTION = "#9C7A32";
+const SAFE = "#3F6B4F";
+
+const SIGNALS = [
+  { id: "goals", label: "Goals / notes field", options: [
+    { v: "empty", label: "Left blank or one generic line", pts: 2 },
+    { v: "generic", label: "Present but generic (\"need a good resume\")", pts: 1 },
+    { v: "specific", label: "Specific — mentions real experience, target roles", pts: 0 },
+  ]},
+  { id: "stageMatch", label: "Career stage vs. what they describe", options: [
+    { v: "mismatch", label: "Doesn't line up (e.g. claims \"exec\" with no history described)", pts: 2 },
+    { v: "unclear", label: "Can't tell either way", pts: 1 },
+    { v: "match", label: "Consistent with the goals/notes they wrote", pts: 0 },
+  ]},
+  { id: "profile", label: "Their LinkedIn profile", options: [
+    { v: "thin", label: "New/thin profile, stock-ish photo, little activity", pts: 2 },
+    { v: "some", label: "Some history but sparse", pts: 1 },
+    { v: "established", label: "Established profile with real activity", pts: 0 },
+  ]},
+  { id: "industry", label: "Industry selection", options: [
+    { v: "everything", label: "Selected a broad grab-bag of unrelated industries", pts: 1 },
+    { v: "focused", label: "One or two coherent, related industries", pts: 0 },
+  ]},
+  { id: "timing", label: "Request timing / behavior", options: [
+    { v: "rush", label: "Marked urgent / oddly demanding for a first message", pts: 2 },
+    { v: "normal", label: "No unusual urgency", pts: 0 },
+  ]},
+];
+
+const LEVEL_MAP = {
+  student: "Student",
+  recent_grad: "Recent graduate",
+  entry: "Entry-level",
+  mid: "Mid-level / individual contributor",
+  manager: "Manager / team lead",
+  senior: "Senior / director",
+  exec: "Executive / founder",
+  late_career: "Late career / retirement transition",
+};
+
+const SERVICES = [
+  { key: "resume", label: "Resume", price: 60 },
+  { key: "cover", label: "Resume + Cover Letter", price: 120 },
+  { key: "complete", label: "Complete Package (Resume + Cover Letter + LinkedIn Profile)", price: 180 },
+];
+
+function recommendedService(resumeType, stage) {
+  if (resumeType === "both") return "complete";
+  if (resumeType === "linkedin") return "complete";
+  if (stage === "new") return "cover";
+  return "resume";
+}
+
+const HOOKS = {
+  new: (resumeType) => `Saw you're starting ${RESUME_TYPE_LINE[resumeType]} from scratch.`,
+  revision: (resumeType) => `Saw you're revising ${RESUME_TYPE_LINE[resumeType]}.`,
+  review: (resumeType) => `Saw you're after a second opinion on ${RESUME_TYPE_LINE[resumeType]}.`,
+};
+
+const RESUME_TYPE_LINE = {
+  traditional: "your resume",
+  linkedin: "your LinkedIn profile",
+  both: "your resume and LinkedIn profile together",
+};
+
+const LEVEL_VOICE = {
+  student: {
+    stakes: [
+      (industry, resumeType) =>
+        `You're up against candidates with the same degree and no way to stand out. A ${RESUME_TYPE_LINE[resumeType]} that just lists coursework gets skipped — recruiters in ${industry || "your field"} are scanning for signs of real capability, not a transcript.`,
+      (industry, resumeType) =>
+        `Right now, nothing on ${RESUME_TYPE_LINE[resumeType]} separates you from every other new grad applying in ${industry || "your field"}. Recruiters give first resumes seconds, not minutes.`,
+    ],
+    edge: [
+      (industry, resumeType, stage) =>
+        `I take your internships and school projects and turn them into something that actually shows what you can do${industry ? ` in ${industry}` : ""}.`,
+      (industry) =>
+        `I pull out what you actually did in your internships and coursework and put that front and center${industry ? ` for ${industry}` : ""}, instead of just listing your classes.`,
+    ],
+  },
+  recent_grad: {
+    stakes: [
+      (industry) =>
+        `The gap between "recent grad" and "hired" is almost always the resume, not the person. Hiring managers in ${industry || "your field"} move fast, and a resume that reads like a school record won't get a second look.`,
+      (industry, resumeType) =>
+        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week of applications going nowhere in ${industry || "your field"}. It's rarely the candidate — it's how they're presented on paper.`,
+    ],
+    edge: [
+      (industry) =>
+        `I take your internships and coursework and shape them into something that reads like real experience${industry ? ` in ${industry}` : ""}, not a school record.`,
+      (industry) =>
+        `I pull the strongest parts of your internships and schoolwork forward, so it reads like someone ready for a real job${industry ? ` in ${industry}` : ""}, not a recent grad checklist.`,
+    ],
+  },
+  entry: {
+    stakes: [
+      (industry) =>
+        `An ineffective resume costs you the next step up. Without proof of the results you've already driven, you get read as more of the same — not ready to grow in ${industry || "your field"}.`,
+      (industry, resumeType) =>
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} that lists duties instead of results keeps you competing for the same level role in ${industry || "your field"}, not the next one.`,
+    ],
+    edge: [
+      (industry) =>
+        `I rebuild it around what you've actually accomplished so far${industry ? ` in ${industry}` : ""}, so it doesn't read like more of the same role you're already in.`,
+      (industry) =>
+        `I dig into what you've actually gotten done in your current role and lead with that${industry ? ` for ${industry}` : ""}, so it reads like someone ready to move up.`,
+    ],
+  },
+  mid: {
+    stakes: [
+      (industry) =>
+        `Missed interviews, lost time, opportunities that go elsewhere — that's what a resume listing duties instead of impact costs you in ${industry || "your field"}. Hiring managers move fast and standard materials won't get you noticed.`,
+      (industry, resumeType) =>
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is competing against candidates who lead with numbers. If yours leads with responsibilities instead, it's losing in ${industry || "your field"}.`,
+    ],
+    edge: [
+      (industry) =>
+        `I focus on the results you've actually gotten, not just your day-to-day responsibilities, so it's easier for someone in ${industry || "your field"} to see your value fast.`,
+      (industry) =>
+        `I pull out the numbers and outcomes you've actually driven, not your job description, so recruiters in ${industry || "your field"} can see the impact right away.`,
+    ],
+  },
+  manager: {
+    stakes: [
+      (industry) =>
+        `At your level, a resume that undersells scope — team size, budget, ownership — reads as an individual contributor, not a leader. That mismatch costs ${industry || "your field"} candidates real opportunities.`,
+      (industry, resumeType) =>
+        `If ${RESUME_TYPE_LINE[resumeType]} doesn't lead with what you owned — not just what you did — it reads a level below where you actually operate in ${industry || "your field"}.`,
+    ],
+    edge: [
+      (industry) =>
+        `I make sure it shows what you actually owned as a manager in ${industry || "your field"}, not just what your team did.`,
+      (industry) =>
+        `I lead with the scope you actually managed in ${industry || "your field"}, budget, headcount, outcomes, so it reads like leadership, not just oversight.`,
+    ],
+  },
+  senior: {
+    stakes: [
+      (industry) =>
+        `At this level a task-list resume actively works against you — it reads junior. In ${industry || "your field"}, the bar is a track record told through decisions and outcomes, not duties.`,
+      (industry, resumeType) =>
+        `Reviewers at your level skim ${RESUME_TYPE_LINE[resumeType]} for judgment and results, not a job history. Anything less reads as overqualified for the wrong reasons in ${industry || "your field"}.`,
+    ],
+    edge: [
+      (industry) =>
+        `I write it around a handful of real decisions you've made in ${industry || "your field"}, not a long list of past titles.`,
+      (industry) =>
+        `I lead with the outcomes you're actually known for in ${industry || "your field"}, not a chronological walk through every job you've had.`,
+    ],
+  },
+  exec: {
+    stakes: [
+      (industry) =>
+        `At the executive level, your resume is read by people evaluating judgment, not tasks. Anything less than a strategic document costs you credibility before the conversation even starts in ${industry || "your field"}.`,
+      (industry, resumeType) =>
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is likely the first and only thing a board or search partner sees before deciding you're worth a call in ${industry || "your field"}.`,
+    ],
+    edge: [
+      (industry) =>
+        `I focus on results, not a list of duties, since that's what people making hiring decisions in ${industry || "your field"} are actually looking for.`,
+      (industry) =>
+        `I keep it built around the calls you've made and what came from them in ${industry || "your field"}, since that's what a board or search partner actually reads for.`,
+    ],
+  },
+  late_career: {
+    stakes: [
+      (industry) =>
+        `A resume that lists every role since the start of your career can read as dated instead of experienced to hiring managers in ${industry || "your field"}, even when the experience behind it is strong.`,
+    ],
+    edge: [
+      (industry) =>
+        `I focus on your last few roles and what you bring today, instead of walking through your whole career history${industry ? ` in ${industry}` : ""}.`,
+      (industry) =>
+        `I keep it tight around your most recent, most relevant work${industry ? ` in ${industry}` : ""}, so it reads as current, not as a full career timeline.`,
+    ],
+  },
+};
+
+// Distilled from Erika's real message history — used as the system prompt so replies
+// are genuinely drafted for what the client wrote, not picked from a fixed list.
+const VOICE_SYSTEM_PROMPT = `You are drafting a LinkedIn reply for Erika, a resume-writing specialist, replying to a client message. Match her real voice exactly:
+
+- Formal but warm. Opens with "Thank you for..." / "Thanks for sharing..." / "Kindly...". Never casual ("Hey", "Hiya").
+- States problems factually before offering the fix, e.g. "After reviewing your resume, I noticed it does not meet the standard required for the applicant tracking system." Diagnosis first, reassurance second.
+- Calm, firm boundaries on scope/policy (e.g. no phone calls, payment upfront) — polite but does not waver.
+- Reassurance uses specific, repeatable commitments: "100% customer satisfaction," "up to two revisions," never vague promises.
+- Sign-off is "Best regards," "Sincerely," "Thanks," or just her name — never casual sign-offs.
+- No em-dashes. Minimal to no exclamation marks. Contractions used sparingly (some "I'm", "I'd", but not heavily casual).
+- Never mentions AI, generic terms like "leverage" or "synergy," or filler enthusiasm.
+- Keep replies as short as the situation allows — most of her real replies are 1-4 sentences, occasionally longer only for detailed feedback or a full policy explanation.
+
+Here are real examples of her voice for grounding (do not copy these verbatim, use them only to match tone and structure):
+${[
+  "After reviewing your resume, I noticed it does not meet the standards required for the applicant tracking system. However, I'm confident I can help transform it into a professional resume that truly stands out.",
+  "I don't offer phone consultations, but I'd be happy to answer any questions or concerns you have here.",
+  "I understand your concern, and I want to assure you that I guarantee 100% customer satisfaction. You can request up to two revisions after receiving the initial draft to ensure it meets your expectations.",
+  "Thank you for sharing that. Please feel free to provide more details about your volunteer work, including your responsibilities and the impact of your involvement.",
+  "Full payment is required upfront. I'll send the invoice to your email address shortly.",
+  "I want to assure you that I do not use AI to write. Every resume I create is personally crafted with careful attention to detail.",
+].map((l) => `- ${l}`).join("\n")}
+
+Write ONE reply, addressed to what the client actually said. Do not add a subject line. Do not explain your reasoning — output only the reply text.`;
+
+async function generateAIResponse({ clientMessage, situationLabel, clientName, extraContext }) {
+  const userPrompt = [
+    situationLabel ? `Context: ${situationLabel}.` : "",
+    clientName ? `Client's name: ${clientName}.` : "",
+    extraContext || "",
+    `Client's message:\n"""${clientMessage}"""`,
+    "Draft Erika's reply.",
+  ].filter(Boolean).join("\n\n");
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system: VOICE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  const data = await res.json();
+  const text = (data.content || [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+  if (!text) throw new Error("Empty response");
+  return text;
+}
+
+// Phrase bank pulled directly from Erika's own past client messages — reused and
+// lightly parameterized, not newly generated, so replies sound like her, not an AI.
+const RESPONSE_BANK = {
+  askForResume: [
+    (n) => `Thanks for contacting me${n ? `, ${n}` : ""}. I'm available for a chat and would be happy to review your resume. Kindly send a copy of your current resume here for a free review.`,
+    (n) => `Thank you for reaching out${n ? `, ${n}` : ""}. I'd be happy to help with your resume writing request and would love to review your resume. Please share a copy here for a free comprehensive review.`,
+    () => `Thanks for contacting me. Kindly send a copy of your current resume for reviewing.`,
+  ],
+  atsNegative: [
+    () => `Thanks for sharing your resume with me. After a careful review, I observed that it does not meet the standard required for the applicant tracking system. Additionally it is not well-structured and needs proper formatting. However, I'm confident I can help transform it into a professional resume that truly stands out.`,
+    () => `After reviewing your resume, I noticed it does not meet the standards required for the applicant tracking system. It looks too formal and not well-structured. However, I'm confident I can help transform it into a professional resume that truly stands out.`,
+    () => `Your resume does not meet ATS standards due to formatting issues such as alignment, a lack of job-specific keywords required for ranking, and non-standard section titles that may not be recognized by the ATS.`,
+  ],
+  atsPositiveWithSuggestions: [
+    () => `Thanks for sharing your resume with me. I've carefully reviewed it, and I'd like to share some feedback. While your resume includes valuable experience and certifications, it doesn't fully highlight your key achievements. It could also benefit from improved formatting and stronger action verbs. I recommend breaking up dense sections of text into clear, ATS-friendly bullet points to improve readability and overall impact.`,
+    () => `Thank you for sharing your resume with me. After a careful review, I noticed that while your resume effectively highlights your achievements and certifications, it could benefit from improved formatting and the use of ATS-compatible bullet points to break up dense text for better readability and impact.`,
+  ],
+  askJobTitle: [
+    () => `May I ask whether you are actively searching for a new role?`,
+    () => `What job position are you applying for?`,
+    () => `Are you applying for a new position, or are you looking to update your current resume?`,
+  ],
+  askIndustry: [
+    () => `Got it! So, is there a particular industry you're hoping to work in?`,
+    () => `Kindly let me know if there is a specific industry or sector you are targeting.`,
+  ],
+  askAchievements: [
+    () => `Do you have any notable performance metrics or achievements from your previous work experience that you would like to share with me?`,
+    () => `I've reviewed your profile. Do you have any notable achievements from your previous work experience that you'd like to share with me?`,
+  ],
+  askCertifications: [
+    () => `Thanks for the quick response. Do you have any recent work experience, certificates, or licenses that you'd like to add to your new resume?`,
+    () => `Do you have any recent certifications or licenses that you would like to include in your updated resume?`,
+  ],
+  pricing: [
+    (p1, p2, p3) => `Below is a breakdown of my service fees:\n\nResume Only: $${p1}\nResume and LinkedIn: $${p2}\nResume + Cover Letter + LinkedIn: $${p3}\n\nLet me know if you have any questions!`,
+    (p1) => `To optimize your resume, cover letter, and LinkedIn profile, I charge $${p1}.`,
+  ],
+  declinePhoneCall: [
+    () => `Thank you for your response. I'm available to chat via messages on LinkedIn only.`,
+    () => `Understood. The reason I prefer not to engage in phone calls is because I often miss important information when there is excessive discussion with clients. I find it easier to reference requirements from text messages. If you could kindly provide your requirements in a text message format, that would be greatly appreciated.`,
+    () => `I don't offer phone consultations, but I'd be happy to answer any questions or concerns you have here.`,
+  ],
+  paymentRequest: [
+    () => `I've sent the invoice to your email address. Kindly let me know once the payment has been completed so I can begin working on your resume as soon as possible.`,
+    () => `To proceed with your order, kindly send your preferred email address for an invoice.`,
+  ],
+  paymentFollowUp: [
+    () => `I wanted to confirm if you've completed the payment, as I've been waiting to hear from you.`,
+    () => `I'm following up to inquire if you have made the payment for your resume, so I can promptly commence working on it.`,
+  ],
+  reassurance: [
+    () => `I understand your concern, and I want to assure you that I guarantee 100% customer satisfaction. You can request up to two revisions after receiving the initial draft to ensure it meets your expectations.`,
+    () => `Rest assured, when you use my service, your order is protected by a refund policy to ensure your satisfaction.`,
+  ],
+  delivery: [
+    () => `Thank you for choosing my resume writing service. I've attached your documents for your review. Please take a moment to check them, and I await your feedback.`,
+    () => `I have finished writing your resume and just need to do some proofreading. I will send it to you shortly.`,
+  ],
+  expedite: [
+    (d) => `I understand the urgency and can expedite the process for you. You can expect to receive it by the end of the day ${d || "today"}.`,
+    (d) => `I'll expedite the process, and you can expect to receive your resume by ${d || "Wednesday"}.`,
+  ],
+};
+
+const SITUATIONS = [
+  { id: "askForResume", label: "New lead — ask them to send their resume" },
+  { id: "atsNegative", label: "Reviewed resume — fails ATS, needs work" },
+  { id: "atsPositiveWithSuggestions", label: "Reviewed resume — decent, minor suggestions" },
+  { id: "askJobTitle", label: "Ask what role/position they're targeting" },
+  { id: "askIndustry", label: "Ask what industry they're targeting" },
+  { id: "askAchievements", label: "Ask for achievements/metrics" },
+  { id: "askCertifications", label: "Ask about certifications/licenses" },
+  { id: "pricing", label: "Share pricing" },
+  { id: "declinePhoneCall", label: "They asked for a call — decline politely" },
+  { id: "paymentRequest", label: "Ready to start — request payment" },
+  { id: "paymentFollowUp", label: "Follow up on unpaid invoice" },
+  { id: "reassurance", label: "They're hesitant — reassure them" },
+  { id: "delivery", label: "Delivering the finished document" },
+  { id: "expedite", label: "They want it rushed — confirm expedited timeline" },
+];
+
+const RANKING_STEPS = [
+  { n: 1, title: "Nail the headline formula", body: "Stack 2-3 exact-match phrase variations your target clients search. Repeat the literal keywords, since exact match in headline is the top tiebreaker within your network tier." },
+  { n: 2, title: "Fill every section completely", body: "About section with a clear offer, full experience with quantified achievements, education, and at least one certification. Completeness is consistent across every top-ranked profile." },
+  { n: 3, title: "Set up the Services section correctly", body: "List \u201cResume Writing\u201d (or your close synonym) as a service category. This is a baseline eligibility filter, not a rank booster \u2014 missing it can exclude you from results entirely." },
+  { n: 4, title: "Get at least one genuine review", body: "Reviews help but don't override network signals. One authentic, detailed recommendation clears the credibility bar \u2014 prioritize getting it fast over chasing volume." },
+  { n: 5, title: "Grow 1st/2nd-degree connections in your target pool", body: "The dominant ranking factor \u2014 more than credentials or reviews. Deliberately connect with job seekers, HR professionals, and recruiters in your niche, since proximity is scored per-searcher." },
+  { n: 6, title: "Post weekly using your exact headline keywords", body: "Consistent posting reinforces the keyword-to-profile association site-wide, not just on your profile page. Sign or frame posts using the same phrases from your headline." },
+  { n: 7, title: "Re-check and iterate monthly", body: "Search your own target phrases from your account periodically. Results are personalized per searcher \u2014 use this to sanity-check your own position, not to benchmark against someone else's search." },
+];
+
+async function generatePostFromClaude({ task, niche, keywords, formatPref, sourceText, contextNote, imageBase64, imageMediaType }) {
+  const keywordLine = keywords ? `Also naturally weave in these target keywords so they read as exact or near-exact phrases (for search/discovery relevance, not stuffed): ${keywords}. Note briefly how you reinforced them.` : "";
+
+  let instructions;
+  if (task === "rewrite") {
+    instructions = `You are a LinkedIn content strategist. Analyze the ORIGINAL POST (given as text or an image below), identify its viral format/hook pattern (e.g. before/after story, contrarian hot take, curated list, quantified result), briefly explain why that pattern works, then rewrite the post so it fits the niche of "${niche}" while keeping the same structural pattern and emotional hook.
+
+${keywordLine}
+${contextNote ? `Extra context from the user: ${contextNote}` : ""}
+
+Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact shape:
+{"format": "short format label", "why": "1-2 sentence explanation of why this pattern works", "keywordNote": "1 sentence on how keywords were woven in, or empty string if none given", "rewritten": "the full rewritten post ready to publish, in the target niche"}`;
+  } else {
+    instructions = `You are a LinkedIn content strategist for the niche "${niche}". The user wants a brand new post built around the topic, story, client review, or photo given below (not a rewrite of an existing viral post). Pick the strongest viral format for this material${formatPref ? ` \u2014 the user prefers: ${formatPref}` : " (before/after story, contrarian hot take, curated list, or quantified result \u2014 whichever fits the material best)"}, explain briefly why that format suits this material, then write the full post.
+
+${keywordLine}
+${contextNote ? `Extra context from the user: ${contextNote}` : ""}
+
+Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact shape:
+{"format": "short format label", "why": "1-2 sentence explanation of why this format fits this material", "keywordNote": "1 sentence on how keywords were woven in, or empty string if none given", "rewritten": "the full new post ready to publish"}`;
+  }
+
+  const content = [];
+  if (imageBase64) {
+    content.push({ type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } });
+    content.push({ type: "text", text: instructions + (sourceText ? `\n\nUser's notes about the photo/topic:\n"""${sourceText}"""` : "") });
+  } else {
+    const label = task === "rewrite" ? "ORIGINAL POST" : "TOPIC / STORY / REVIEW";
+    content.push({ type: "text", text: instructions + `\n\n${label}:\n"""${sourceText}"""` });
+  }
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  const data = await res.json();
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+  const clean = text.replace(/```json|```/g, "").trim();
+  return JSON.parse(clean);
+}
+
+function verdict(score, max) {
+  const pct = max ? score / max : 0;
+  if (pct >= 0.55) return { text: "Looks likely fake or low-value — verify before spending time", color: RISK, glyph: "⚠" };
+  if (pct >= 0.25) return { text: "Mixed signals — worth a quick clarifying question first", color: CAUTION, glyph: "?" };
+  return { text: "Looks like a real, worthwhile lead", color: SAFE, glyph: "✓" };
+}
+
+function App() {
+  const [tab, setTab] = useState("screen");
+  const [signals, setSignals] = useState({});
+  const [name, setName] = useState("");
+  const [yourName, setYourName] = useState("");
+  const [level, setLevel] = useState("mid");
+  const [resumeType, setResumeType] = useState("traditional");
+  const [stage, setStage] = useState("revision");
+  const [industry, setIndustry] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [variantSeed, setVariantSeed] = useState(0);
+  const [respSituation, setRespSituation] = useState("askForResume");
+  const [respClientName, setRespClientName] = useState("");
+  const [respP1, setRespP1] = useState("120");
+  const [respP2, setRespP2] = useState("180");
+  const [respP3, setRespP3] = useState("220");
+  const [respDay, setRespDay] = useState("");
+  const [respSeed, setRespSeed] = useState(0);
+  const [respCopied, setRespCopied] = useState(false);
+  const [pastedClientMsg, setPastedClientMsg] = useState("");
+  const [aiMode, setAiMode] = useState(false);
+  const [aiDraft, setAiDraft] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiCopied, setAiCopied] = useState(false);
+
+  const [postTask, setPostTask] = useState("rewrite");
+  const [postNiche, setPostNiche] = useState("Resume writing / career coaching");
+  const [postKeywords, setPostKeywords] = useState("");
+  const [postFormatPref, setPostFormatPref] = useState("");
+  const [postSourceMode, setPostSourceMode] = useState("text");
+  const [postSourceText, setPostSourceText] = useState("");
+  const [postContext, setPostContext] = useState("");
+  const [postImageBase64, setPostImageBase64] = useState(null);
+  const [postImageMediaType, setPostImageMediaType] = useState(null);
+  const [postImagePreview, setPostImagePreview] = useState(null);
+  const [postLoading, setPostLoading] = useState(false);
+  const [postError, setPostError] = useState("");
+  const [postResult, setPostResult] = useState(null);
+  const [postCopied, setPostCopied] = useState(false);
+
+  const loadPostImage = (file) => {
+    if (!file) return;
+    setPostImageMediaType(file.type);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPostImageBase64(reader.result.split(",")[1]);
+      setPostImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const runPostGenerate = async () => {
+    const hasInput = postSourceMode === "text" ? !!postSourceText.trim() : !!postImageBase64;
+    if (!hasInput) {
+      setPostError(postTask === "rewrite" ? "Paste the original post text or a screenshot first." : "Describe the topic or add a photo first.");
+      return;
+    }
+    setPostError("");
+    setPostLoading(true);
+    setPostResult(null);
+    try {
+      const result = await generatePostFromClaude({
+        task: postTask,
+        niche: postNiche,
+        keywords: postKeywords,
+        formatPref: postTask === "create" ? postFormatPref : "",
+        sourceText: postSourceText,
+        contextNote: postContext,
+        imageBase64: postSourceMode === "image" ? postImageBase64 : null,
+        imageMediaType: postImageMediaType,
+      });
+      setPostResult(result);
+    } catch (e) {
+      setPostError("Couldn't generate that \u2014 check connection and try again.");
+    } finally {
+      setPostLoading(false);
+    }
+  };
+
+  const copyPostResult = () => {
+    if (!postResult) return;
+    navigator.clipboard.writeText(postResult.rewritten || "").catch(() => {});
+    setPostCopied(true);
+    setTimeout(() => setPostCopied(false), 1600);
+  };
+
+  const maxScore = SIGNALS.reduce((s, f) => s + Math.max(...f.options.map((o) => o.pts)), 0);
+  const score = SIGNALS.reduce((s, f) => {
+    const chosen = f.options.find((o) => o.v === signals[f.id]);
+    return s + (chosen ? chosen.pts : 0);
+  }, 0);
+  const answeredAll = SIGNALS.every((f) => signals[f.id]);
+  const v = verdict(score, maxScore);
+
+  const ADDON_DESC = {
+    cover: "a tailored cover letter",
+    complete: "a tailored cover letter and LinkedIn profile optimization",
+  };
+
+  const proposal = useMemo(() => {
+    const L = LEVEL_VOICE[level];
+    const capitalizedName = name.trim() ? name.trim().charAt(0).toUpperCase() + name.trim().slice(1) : "";
+    const greeting = `Hi ${capitalizedName || "[Name]"},`;
+    const me = yourName || "[Your Name]";
+
+    const hook = HOOKS[stage](resumeType);
+
+    const stakesPool = L.stakes;
+    const stakes = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
+    const stakesLower = stakes.charAt(0).toLowerCase() + stakes.slice(1);
+    const openLine = `${hook} Here's the thing — ${stakesLower}`;
+
+    const edgePool = L.edge;
+    let approach = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
+    const approachLower = approach.startsWith("I ") ? approach : approach.charAt(0).toLowerCase() + approach.slice(1);
+    const fixLine = `That's what I fix — ${approachLower}`;
+
+    const basePrice = (level === "manager" || level === "senior") ? 120 : 60;
+    const priceLine = `Starting at $${basePrice}, I professionally rewrite your resume and deliver it within 24 hours.`;
+    const bundleLine = "If you're updating more than just your resume, I also offer bundle packages that include a tailored cover letter and/or a professionally written LinkedIn profile.";
+
+    return [
+      greeting,
+      "",
+      openLine,
+      "",
+      fixLine,
+      "",
+      priceLine,
+      "",
+      bundleLine,
+      "",
+      "Want a quick teardown of the two things most likely holding your resume back right now? Send a copy of your resume over for a free review?",
+      `— ${me}`,
+    ].join("\n");
+  }, [name, yourName, level, resumeType, stage, industry, variantSeed]);
+
+  const copyProposal = () => {
+    navigator.clipboard.writeText(proposal).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
+  const response = useMemo(() => {
+    const bank = RESPONSE_BANK[respSituation];
+    const fn = bank[respSeed % bank.length];
+    if (respSituation === "pricing") return fn(respP1, respP2, respP3);
+    if (respSituation === "expedite") return fn(respDay);
+    return fn(respClientName);
+  }, [respSituation, respSeed, respClientName, respP1, respP2, respP3, respDay]);
+
+  const copyResponse = () => {
+    navigator.clipboard.writeText(response).catch(() => {});
+    setRespCopied(true);
+    setTimeout(() => setRespCopied(false), 1600);
+  };
+
+  const runAIDraft = async () => {
+    if (!pastedClientMsg.trim()) {
+      setAiError("Paste the client's message first.");
+      return;
+    }
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const situationLabel = SITUATIONS.find((s) => s.id === respSituation)?.label || "";
+      const extraContext =
+        respSituation === "pricing" ? `Pricing tiers: Resume $${respP1}, Resume+LinkedIn $${respP2}, Full package $${respP3}.` :
+        respSituation === "expedite" ? `Requested delivery: ${respDay || "not specified"}.` : "";
+      const draft = await generateAIResponse({
+        clientMessage: pastedClientMsg,
+        situationLabel,
+        clientName: respClientName,
+        extraContext,
+      });
+      setAiDraft(draft);
+    } catch (e) {
+      setAiError("Couldn't generate a reply — check connection and try again.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const copyAIDraft = () => {
+    navigator.clipboard.writeText(aiDraft).catch(() => {});
+    setAiCopied(true);
+    setTimeout(() => setAiCopied(false), 1600);
+  };
+
+  const selectStyle = { width: "100%", padding: "9px 10px", borderRadius: 4, border: "1px solid #D8D0BC", fontSize: 14, background: "#fff", color: INK };
+  const labelStyle = { fontSize: 12, fontFamily: "'Courier New', monospace", color: "#5A5142", display: "block", marginBottom: 4, letterSpacing: 0.3 };
+
+  return (
+    <div style={{ background: INK, minHeight: "100vh", fontFamily: "Georgia, 'Iowan Old Style', serif" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "40px 20px 80px" }}>
+        <header style={{ borderBottom: `2px solid ${BRASS}`, paddingBottom: 20, marginBottom: 28 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <h1 style={{ color: PAPER, fontSize: 28, margin: 0, letterSpacing: 0.3 }}>Lead Desk</h1>
+            <span style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 12, letterSpacing: 1.5, textTransform: "uppercase" }}>resume writing · outreach · content</span>
+          </div>
+          <p style={{ color: "#9AA3B0", fontFamily: "'Courier New', monospace", fontSize: 13, marginTop: 8 }}>Lead screening, proposals, client replies, and LinkedIn content in one place.</p>
+        </header>
+
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { id: "screen", label: "Check if real" },
+            { id: "propose", label: "Build proposal" },
+            { id: "respond", label: "Respond to client" },
+            { id: "posts", label: "Post generator" },
+            { id: "ranking", label: "Ranking template" },
+          ].map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: "10px 18px", background: tab === t.id ? PAPER : "transparent", color: tab === t.id ? INK : "#9AA3B0",
+              border: "none", borderRadius: "6px 6px 0 0", fontFamily: "'Courier New', monospace", fontSize: 13,
+              letterSpacing: 0.5, cursor: "pointer", fontWeight: tab === t.id ? 700 : 400,
+            }}>{t.label}</button>
+          ))}
+        </div>
+
+        <div style={{ background: PAPER, borderRadius: "0 8px 8px 8px", padding: 28, color: INK }}>
+          {tab === "screen" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                Pick the option that best matches what you see on their LinkedIn request.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {SIGNALS.map((f) => (
+                  <div key={f.id}>
+                    <label style={labelStyle}>{f.label.toUpperCase()}</label>
+                    <select value={signals[f.id] || ""} onChange={(e) => setSignals((s) => ({ ...s, [f.id]: e.target.value }))} style={selectStyle}>
+                      <option value="" disabled>Select...</option>
+                      {f.options.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 22, padding: "16px 18px", borderRadius: 6, background: INK, display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ color: v.color, fontSize: 20, fontWeight: 700 }}>{v.glyph}</span>
+                <div>
+                  <div style={{ color: v.color, fontWeight: 700, fontFamily: "'Courier New', monospace", fontSize: 13 }}>
+                    {answeredAll ? v.text : "Answer all fields for a verdict"}
+                  </div>
+                  {answeredAll && <div style={{ color: "#9AA3B0", fontSize: 12, fontFamily: "'Courier New', monospace" }}>{score} of {maxScore} risk points</div>}
+                </div>
+              </div>
+              <p style={{ fontSize: 12, color: "#8A8272", marginTop: 14 }}>
+                On its own, a blank goals field plus a thin profile is usually enough reason to send one clarifying question before writing a full proposal.
+              </p>
+            </div>
+          )}
+
+          {tab === "propose" && (
+            <div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }}>
+                <div>
+                  <label style={labelStyle}>THEIR FIRST NAME (OPTIONAL)</label>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Priya" style={selectStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>YOUR NAME</label>
+                  <input value={yourName} onChange={(e) => setYourName(e.target.value)} placeholder="e.g. Erika" style={selectStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>WHERE ARE YOU IN YOUR CAREER?</label>
+                  <select value={level} onChange={(e) => setLevel(e.target.value)} style={selectStyle}>
+                    {Object.entries(LEVEL_MAP).map(([k, lbl]) => <option key={k} value={k}>{lbl}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>WHAT TYPE OF RESUME?</label>
+                  <select value={resumeType} onChange={(e) => setResumeType(e.target.value)} style={selectStyle}>
+                    <option value="traditional">Traditional resume</option>
+                    <option value="linkedin">LinkedIn profile</option>
+                    <option value="both">Both</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>WHAT STAGE?</label>
+                  <select value={stage} onChange={(e) => setStage(e.target.value)} style={selectStyle}>
+                    <option value="new">Starting from scratch</option>
+                    <option value="revision">Revising an existing resume</option>
+                    <option value="review">Just wants a review</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>INDUSTRY (TYPE FREELY)</label>
+                  <input value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. sales, marketing, PR" style={selectStyle} />
+                </div>
+              </div>
+
+              <div style={{ position: "relative" }}>
+                <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                  <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>DRAFT</div>
+                  {proposal}
+                </div>
+                <button onClick={copyProposal} style={{
+                  marginTop: 12, padding: "9px 16px", background: copied ? SAFE : INK, color: PAPER, border: "none",
+                  borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                }}>{copied ? "Copied" : "Copy draft"}</button>
+                <button onClick={() => setVariantSeed((s) => s + 1)} style={{
+                  marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
+                  border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                }}>Try different wording</button>
+              </div>
+            </div>
+          )}
+
+          {tab === "respond" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                Pulled from your own past client messages — pick what's happening, fill in the specifics.
+              </p>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>PASTE THEIR MESSAGE</label>
+                <textarea
+                  value={pastedClientMsg}
+                  onChange={(e) => setPastedClientMsg(e.target.value)}
+                  placeholder="Paste exactly what the client said..."
+                  style={{ ...selectStyle, minHeight: 90, fontFamily: "inherit", resize: "vertical" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+                <button
+                  onClick={() => setAiMode(true)}
+                  style={{
+                    padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                    fontFamily: "'Courier New', monospace", fontSize: 12,
+                    background: aiMode ? INK : "transparent", color: aiMode ? PAPER : INK,
+                    border: `1px solid ${INK}`,
+                  }}
+                >
+                  AI-drafted reply
+                </button>
+                <button
+                  onClick={() => setAiMode(false)}
+                  style={{
+                    padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                    fontFamily: "'Courier New', monospace", fontSize: 12,
+                    background: !aiMode ? INK : "transparent", color: !aiMode ? PAPER : INK,
+                    border: `1px solid ${INK}`,
+                  }}
+                >
+                  Quick pick (fixed phrases)
+                </button>
+              </div>
+
+              {aiMode && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
+                    <div>
+                      <label style={labelStyle}>SITUATION (HELPS THE DRAFT, OPTIONAL)</label>
+                      <select value={respSituation} onChange={(e) => setRespSituation(e.target.value)} style={selectStyle}>
+                        <option value="">No specific situation</option>
+                        {SITUATIONS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
+                      <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
+                    </div>
+                    {respSituation === "pricing" && (
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={labelStyle}>RESUME ONLY</label>
+                          <input value={respP1} onChange={(e) => setRespP1(e.target.value)} style={selectStyle} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={labelStyle}>+ LINKEDIN</label>
+                          <input value={respP2} onChange={(e) => setRespP2(e.target.value)} style={selectStyle} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={labelStyle}>+ COVER LETTER</label>
+                          <input value={respP3} onChange={(e) => setRespP3(e.target.value)} style={selectStyle} />
+                        </div>
+                      </div>
+                    )}
+                    {respSituation === "expedite" && (
+                      <div>
+                        <label style={labelStyle}>DELIVERY DAY</label>
+                        <input value={respDay} onChange={(e) => setRespDay(e.target.value)} placeholder="e.g. Wednesday, today" style={selectStyle} />
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={runAIDraft}
+                    disabled={aiLoading}
+                    style={{
+                      padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6,
+                      fontFamily: "'Courier New', monospace", fontSize: 13, cursor: aiLoading ? "default" : "pointer",
+                      opacity: aiLoading ? 0.6 : 1, marginBottom: 16,
+                    }}
+                  >
+                    {aiLoading ? "Drafting..." : "Draft reply"}
+                  </button>
+
+                  {aiError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{aiError}</p>}
+
+                  {aiDraft && (
+                    <div style={{ position: "relative" }}>
+                      <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>AI DRAFT</div>
+                        {aiDraft}
+                      </div>
+                      <button
+                        onClick={copyAIDraft}
+                        style={{
+                          marginTop: 12, padding: "9px 16px", background: aiCopied ? SAFE : INK, color: PAPER,
+                          border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                        }}
+                      >
+                        {aiCopied ? "Copied" : "Copy draft"}
+                      </button>
+                      <button
+                        onClick={runAIDraft}
+                        disabled={aiLoading}
+                        style={{
+                          marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
+                          border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                        }}
+                      >
+                        Regenerate
+                      </button>
+                    </div>
+                  )}
+                  <p style={{ fontSize: 12, color: "#8A8272", marginTop: 14 }}>
+                    Drafted fresh from what they wrote, in Erika's voice — always read before sending.
+                  </p>
+                </div>
+              )}
+
+              {!aiMode && (
+              <div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }} data-marker="respond-quick-pick">
+                <div>
+                  <label style={labelStyle}>WHAT'S THE SITUATION?</label>
+                  <select value={respSituation} onChange={(e) => { setRespSituation(e.target.value); setRespSeed(0); }} style={selectStyle}>
+                    {SITUATIONS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  </select>
+                </div>
+
+                {respSituation !== "pricing" && respSituation !== "expedite" && (
+                  <div>
+                    <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
+                    <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
+                  </div>
+                )}
+
+                {respSituation === "pricing" && (
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>RESUME ONLY</label>
+                      <input value={respP1} onChange={(e) => setRespP1(e.target.value)} style={selectStyle} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>+ LINKEDIN</label>
+                      <input value={respP2} onChange={(e) => setRespP2(e.target.value)} style={selectStyle} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>+ COVER LETTER</label>
+                      <input value={respP3} onChange={(e) => setRespP3(e.target.value)} style={selectStyle} />
+                    </div>
+                  </div>
+                )}
+
+                {respSituation === "expedite" && (
+                  <div>
+                    <label style={labelStyle}>DELIVERY DAY</label>
+                    <input value={respDay} onChange={(e) => setRespDay(e.target.value)} placeholder="e.g. Wednesday, today" style={selectStyle} />
+                  </div>
+                )}
+              </div>
+
+              <div style={{ position: "relative" }}>
+                <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>
+                    REPLY
+                  </div>
+                  {response}
+                </div>
+                <button
+                  onClick={copyResponse}
+                  style={{
+                    marginTop: 12,
+                    padding: "9px 16px",
+                    background: respCopied ? SAFE : INK,
+                    color: PAPER,
+                    border: "none",
+                    borderRadius: 6,
+                    fontFamily: "'Courier New', monospace",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {respCopied ? "Copied" : "Copy reply"}
+                </button>
+                <button
+                  onClick={() => setRespSeed((s) => s + 1)}
+                  style={{
+                    marginTop: 12,
+                    marginLeft: 10,
+                    padding: "9px 16px",
+                    background: "transparent",
+                    color: INK,
+                    border: `1px solid ${INK}`,
+                    borderRadius: 6,
+                    fontFamily: "'Courier New', monospace",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  Try different phrasing
+                </button>
+              </div>
+              <p style={{ fontSize: 12, color: "#8A8272", marginTop: 14 }}>
+                Every reply here is one you've actually sent before, just filled in with this client's details.
+              </p>
+              </div>
+              )}
+            </div>
+          )}
+
+          {tab === "posts" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                Rewrite a proven post into your niche, or build a new one from a client win or photo.
+              </p>
+
+              <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+                <button onClick={() => { setPostTask("rewrite"); setPostResult(null); setPostError(""); }} style={{
+                  flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
+                  fontFamily: "'Courier New', monospace", fontSize: 12,
+                  background: postTask === "rewrite" ? INK : "transparent", color: postTask === "rewrite" ? PAPER : INK,
+                  border: `1px solid ${INK}`,
+                }}>Rewrite existing post</button>
+                <button onClick={() => { setPostTask("create"); setPostResult(null); setPostError(""); }} style={{
+                  flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
+                  fontFamily: "'Courier New', monospace", fontSize: 12,
+                  background: postTask === "create" ? INK : "transparent", color: postTask === "create" ? PAPER : INK,
+                  border: `1px solid ${INK}`,
+                }}>Create from topic / photo</button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
+                <div>
+                  <label style={labelStyle}>YOUR NICHE</label>
+                  <input value={postNiche} onChange={(e) => setPostNiche(e.target.value)} style={selectStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>TARGET KEYWORDS TO REINFORCE (COMMA SEPARATED)</label>
+                  <input value={postKeywords} onChange={(e) => setPostKeywords(e.target.value)} placeholder="resume writer, professional resume writing services" style={selectStyle} />
+                </div>
+
+                {postTask === "create" && (
+                  <div>
+                    <label style={labelStyle}>PREFERRED FORMAT (OPTIONAL)</label>
+                    <select value={postFormatPref} onChange={(e) => setPostFormatPref(e.target.value)} style={selectStyle}>
+                      <option value="">Let it pick the best fit</option>
+                      <option value="Before/after story">Before/after story</option>
+                      <option value="Contrarian hot take">Contrarian hot take</option>
+                      <option value="Curated list">Curated list</option>
+                      <option value="Quantified result">Quantified result</option>
+                    </select>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setPostSourceMode("text")} style={{
+                    flex: 1, padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                    fontFamily: "'Courier New', monospace", fontSize: 12,
+                    background: postSourceMode === "text" ? INK : "transparent", color: postSourceMode === "text" ? PAPER : INK,
+                    border: `1px solid ${INK}`,
+                  }}>Paste text</button>
+                  <button onClick={() => setPostSourceMode("image")} style={{
+                    flex: 1, padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                    fontFamily: "'Courier New', monospace", fontSize: 12,
+                    background: postSourceMode === "image" ? INK : "transparent", color: postSourceMode === "image" ? PAPER : INK,
+                    border: `1px solid ${INK}`,
+                  }}>Upload or paste image</button>
+                </div>
+
+                {postSourceMode === "text" && (
+                  <div>
+                    <label style={labelStyle}>{postTask === "rewrite" ? "ORIGINAL POST TEXT" : "TOPIC, STORY, OR CLIENT REVIEW"}</label>
+                    <textarea
+                      value={postSourceText}
+                      onChange={(e) => setPostSourceText(e.target.value)}
+                      placeholder={postTask === "rewrite" ? "Paste the full text of the viral post here..." : "Describe the topic or paste the client review/story..."}
+                      style={{ ...selectStyle, minHeight: 100, fontFamily: "inherit", resize: "vertical" }}
+                    />
+                  </div>
+                )}
+
+                {postSourceMode === "image" && (
+                  <div>
+                    <label style={labelStyle}>SCREENSHOT OR PHOTO</label>
+                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => loadPostImage(e.target.files[0])} style={{ fontFamily: "'Courier New', monospace", fontSize: 12 }} />
+                    <div
+                      tabIndex={0}
+                      onPaste={(e) => {
+                        const items = e.clipboardData ? e.clipboardData.items : [];
+                        for (const item of items) {
+                          if (item.type.indexOf("image") === 0) { loadPostImage(item.getAsFile()); e.preventDefault(); break; }
+                        }
+                      }}
+                      style={{ marginTop: 8, border: "1px dashed #D8D0BC", borderRadius: 6, padding: 14, fontSize: 12, fontFamily: "'Courier New', monospace", color: "#8A8272", textAlign: "center", cursor: "text" }}
+                    >
+                      {postImagePreview ? "Image loaded \u2014 click and paste again to replace" : "Click here, then paste (Ctrl/Cmd+V) a copied image"}
+                    </div>
+                    {postImagePreview && <img src={postImagePreview} style={{ maxWidth: "100%", marginTop: 8, borderRadius: 6, border: "1px solid #D8D0BC" }} />}
+                    {postTask === "create" && (
+                      <textarea
+                        value={postSourceText}
+                        onChange={(e) => setPostSourceText(e.target.value)}
+                        placeholder="Any notes about the photo (optional)..."
+                        style={{ ...selectStyle, minHeight: 60, fontFamily: "inherit", resize: "vertical", marginTop: 10 }}
+                      />
+                    )}
+                  </div>
+                )}
+
+                <div>
+                  <label style={labelStyle}>{postTask === "rewrite" ? "POST LINK (OPTIONAL)" : "EXTRA CONTEXT (OPTIONAL)"}</label>
+                  <input value={postContext} onChange={(e) => setPostContext(e.target.value)} placeholder={postTask === "rewrite" ? "https://linkedin.com/..." : "Anything else worth mentioning"} style={selectStyle} />
+                </div>
+              </div>
+
+              <button
+                onClick={runPostGenerate}
+                disabled={postLoading}
+                style={{
+                  padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6,
+                  fontFamily: "'Courier New', monospace", fontSize: 13, cursor: postLoading ? "default" : "pointer",
+                  opacity: postLoading ? 0.6 : 1, marginBottom: 16,
+                }}
+              >
+                {postLoading ? "Working..." : (postTask === "rewrite" ? "Analyze and rewrite" : "Generate post")}
+              </button>
+
+              {postError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{postError}</p>}
+
+              {postResult && (
+                <div>
+                  <div style={{ marginBottom: 14, padding: "14px 16px", borderRadius: 6, background: INK }}>
+                    <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11, marginBottom: 6, letterSpacing: 0.5 }}>DETECTED FORMAT</div>
+                    <div style={{ color: PAPER, fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{postResult.format}</div>
+                    <div style={{ color: "#9AA3B0", fontSize: 12, lineHeight: 1.6 }}>{postResult.why}</div>
+                    {postResult.keywordNote && <div style={{ color: "#9AA3B0", fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>{postResult.keywordNote}</div>}
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                      <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>
+                        {postTask === "rewrite" ? "REWRITTEN POST" : "NEW POST"}
+                      </div>
+                      {postResult.rewritten}
+                    </div>
+                    <button onClick={copyPostResult} style={{
+                      marginTop: 12, padding: "9px 16px", background: postCopied ? SAFE : INK, color: PAPER, border: "none",
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>{postCopied ? "Copied" : "Copy post"}</button>
+                    <button onClick={runPostGenerate} disabled={postLoading} style={{
+                      marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
+                      border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>Regenerate</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "ranking" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                A repeatable checklist for improving where your profile ranks in LinkedIn Services search.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {RANKING_STEPS.map((s) => (
+                  <div key={s.n} style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "14px 16px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                      <span style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 12, fontWeight: 700 }}>{s.n}</span>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{s.title}</div>
+                        <div style={{ fontSize: 13, color: "#5A5142", lineHeight: 1.6 }}>{s.body}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
