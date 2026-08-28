@@ -511,7 +511,7 @@ function App() {
     const stakesPool = L.stakes;
     const stakes = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
     const stakesLower = stakes.charAt(0).toLowerCase() + stakes.slice(1);
-    const openLine = `${hook} Here's the thing — ${stakesLower}`;
+    const openLine = `Here's the thing — ${stakesLower}`;
 
     const edgePool = L.edge;
     let approach = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
