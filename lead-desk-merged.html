@@ -579,6 +579,13 @@ function App() {
     const greeting = `Hi ${capitalizedName || "[Name]"},`;
     const me = yourName || "[Your Name]";
 
+    const softStarts = [
+      "Thanks for connecting. I had a look at your profile, and one thing stood out that I thought was worth sharing.",
+      "Thanks for connecting. I came across your profile and wanted to pass along a quick, honest thought.",
+      "Good to connect. I took a quick look at what you are working toward, and something jumped out at me.",
+    ];
+    const softStart = softStarts[variantSeed % softStarts.length];
+
     const stakesPool = L.stakes;
     const observation = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
 
@@ -591,6 +598,8 @@ function App() {
 
     return [
       greeting,
+      "",
+      softStart,
       "",
       observation,
       "",
