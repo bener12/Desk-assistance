@@ -579,15 +579,10 @@ function App() {
     const greeting = `Hi ${capitalizedName || "[Name]"},`;
     const me = yourName || "[Your Name]";
 
-    const softStarts = [
-      "I hope you do not mind me reaching out. I came across your profile and one thing stood out that I thought was worth sharing.",
-      "I know a message out of the blue is a little unexpected, so I will keep it genuine. I came across your profile and something jumped out at me.",
-      "I came across your profile while looking through people in your field, and I wanted to send a quick, honest thought your way.",
-    ];
-    const softStart = softStarts[variantSeed % softStarts.length];
-
     const stakesPool = L.stakes;
-    const observation = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
+    const observationRaw = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
+    // Open with "Here is the thing" unless the line already leads with "Here is ...".
+    const observation = /^Here is/i.test(observationRaw) ? observationRaw : `Here is the thing. ${observationRaw}`;
 
     const edgePool = L.edge;
     const mechanism = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
@@ -605,8 +600,6 @@ function App() {
 
     return [
       greeting,
-      "",
-      softStart,
       "",
       observation,
       "",
