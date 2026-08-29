@@ -116,152 +116,115 @@ const RESUME_TYPE_LINE = {
   both: "your resume and LinkedIn profile together",
 };
 
-// Give-first cold-open copy. Each level leads with a useful observation about the
-// reader's situation (stakes) and a soft mention of how it gets fixed (edge). No
-// price, no upsell, minimal hyphens. The ask is only the free review.
 const LEVEL_VOICE = {
   student: {
     stakes: [
       (industry, resumeType) =>
-        `A recruiter spends about six seconds on a resume, and right now yours reads like a class schedule. In ${industry || "your field"}, that is a fast no.`,
+        `You're up against candidates with the same degree and no way to stand out. A ${RESUME_TYPE_LINE[resumeType]} that just lists coursework gets skipped — recruiters in ${industry || "your field"} are scanning for signs of real capability, not a transcript.`,
       (industry, resumeType) =>
-        `Everyone applying with your degree looks the same on paper. The ones who get calls aren't smarter, their resume just proves they can actually do the work.`,
-      (industry) =>
-        `You've done more than you think. The problem is your resume buries it under a pile of coursework nobody reads.`,
+        `Right now, nothing on ${RESUME_TYPE_LINE[resumeType]} separates you from every other new grad applying in ${industry || "your field"}. Recruiters give first resumes seconds, not minutes.`,
     ],
     edge: [
+      (industry, resumeType, stage) =>
+        `I take your internships and school projects and turn them into something that actually shows what you can do${industry ? ` in ${industry}` : ""}.`,
       (industry) =>
-        `I'd turn the internships and projects you already have into proof, so you stop getting filtered out before a human ever sees you.`,
-      () =>
-        `I'd make your resume read like someone ready to work, not someone still in class.`,
-      () =>
-        `I'd pull your best work to the top and cut the filler that's burying it.`,
+        `I pull out what you actually did in your internships and coursework and put that front and center${industry ? ` for ${industry}` : ""}, instead of just listing your classes.`,
     ],
   },
   recent_grad: {
     stakes: [
       (industry) =>
-        `You're not underqualified. Your resume is just underselling you, and in ${industry || "your field"} that gap is the whole ballgame.`,
+        `The gap between "recent grad" and "hired" is almost always the resume, not the person. Hiring managers in ${industry || "your field"} move fast, and a resume that reads like a school record won't get a second look.`,
       (industry, resumeType) =>
-        `Applications going quiet is rarely about you. It's usually a resume that reads like a transcript in a stack that gets six seconds each.`,
-      (industry) =>
-        `The jump from graduated to hired almost always comes down to the resume, not the person behind it.`,
+        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week of applications going nowhere in ${industry || "your field"}. It's rarely the candidate — it's how they're presented on paper.`,
     ],
     edge: [
       (industry) =>
-        `I'd reframe your internships and projects so they read like real experience, and the callbacks start making sense.`,
-      () =>
-        `I'd make you sound like someone ready for the job, not someone who just left school.`,
-      () =>
-        `I'd cut the noise and put your strongest work where a recruiter actually looks.`,
+        `I take your internships and coursework and shape them into something that reads like real experience${industry ? ` in ${industry}` : ""}, not a school record.`,
+      (industry) =>
+        `I pull the strongest parts of your internships and schoolwork forward, so it reads like someone ready for a real job${industry ? ` in ${industry}` : ""}, not a recent grad checklist.`,
     ],
   },
   entry: {
     stakes: [
       (industry) =>
-        `Your resume lists what you were assigned, not what you pulled off. That's why you keep landing in the same tier instead of the next one.`,
-      (industry) =>
-        `You're ready for more. Your resume just keeps quietly arguing that you should stay put.`,
-      (industry) =>
-        `Duties tell a recruiter what your job was. Results tell them to hire you. Right now yours is doing the first one.`,
+        `An ineffective resume costs you the next step up. Without proof of the results you've already driven, you get read as more of the same — not ready to grow in ${industry || "your field"}.`,
+      (industry, resumeType) =>
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} that lists duties instead of results keeps you competing for the same level role in ${industry || "your field"}, not the next one.`,
     ],
     edge: [
       (industry) =>
-        `I'd rebuild it around what you've actually driven, so you read like the promotion, not the plateau.`,
-      () =>
-        `I'd swap the task list for real wins, and suddenly you look like the obvious next hire.`,
-      () =>
-        `I'd lead with your results so a recruiter sees momentum, not more of the same.`,
+        `I rebuild it around what you've actually accomplished so far${industry ? ` in ${industry}` : ""}, so it doesn't read like more of the same role you're already in.`,
+      (industry) =>
+        `I dig into what you've actually gotten done in your current role and lead with that${industry ? ` for ${industry}` : ""}, so it reads like someone ready to move up.`,
     ],
   },
   mid: {
     stakes: [
       (industry) =>
-        `You're good at your job. Your resume just doesn't say so, it reads like a job description someone else wrote.`,
+        `Missed interviews, lost time, opportunities that go elsewhere — that's what a resume listing duties instead of impact costs you in ${industry || "your field"}. Hiring managers move fast and standard materials won't get you noticed.`,
       (industry, resumeType) =>
-        `You're up against people who lead with numbers. If yours leads with responsibilities, you're already behind in ${industry || "your field"}.`,
-      (industry) =>
-        `The work is there. Proving it on paper is where most people at your level quietly lose the interview.`,
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is competing against candidates who lead with numbers. If yours leads with responsibilities instead, it's losing in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
-        `I'd turn your duties into impact, with the numbers and outcomes that make a recruiter stop scrolling.`,
-      () =>
-        `I'd make your resume brag for you, tastefully, so your value lands in the first ten seconds.`,
-      () =>
-        `I'd pull your real wins forward so you read like a top performer, because you are one.`,
+        `I focus on the results you've actually gotten, not just your day-to-day responsibilities, so it's easier for someone in ${industry || "your field"} to see your value fast.`,
+      (industry) =>
+        `I pull out the numbers and outcomes you've actually driven, not your job description, so recruiters in ${industry || "your field"} can see the impact right away.`,
     ],
   },
   manager: {
     stakes: [
       (industry) =>
-        `Your resume shows what your team did. It barely shows what you drove. To a hiring manager, that reads as a contributor, not a leader.`,
-      (industry) =>
-        `At your level, hazy scope is expensive. If your budget, headcount, and ownership aren't obvious, you get read a rung too low.`,
+        `At your level, a resume that undersells scope — team size, budget, ownership — reads as an individual contributor, not a leader. That mismatch costs ${industry || "your field"} candidates real opportunities.`,
       (industry, resumeType) =>
-        `You lead the room, but your resume still writes like you're just in it. That mismatch costs you the roles you actually want.`,
+        `If ${RESUME_TYPE_LINE[resumeType]} doesn't lead with what you owned — not just what you did — it reads a level below where you actually operate in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
-        `I'd make your ownership impossible to miss, the scope, the calls, the outcomes that were yours.`,
-      () =>
-        `I'd reframe the team wins as your leadership, so you read like the person who ran it.`,
-      () =>
-        `I'd put your budget, headcount, and results up front so you land as a leader on the first pass.`,
+        `I make sure it shows what you actually owned as a manager in ${industry || "your field"}, not just what your team did.`,
+      (industry) =>
+        `I lead with the scope you actually managed in ${industry || "your field"}, budget, headcount, outcomes, so it reads like leadership, not just oversight.`,
     ],
   },
   senior: {
     stakes: [
       (industry) =>
-        `A task list at your level reads junior. Nobody senior gets hired for what they were responsible for, they get hired for the calls they made.`,
-      (industry) =>
-        `Your experience is an asset until the resume turns it into a timeline. Then it just reads long, not senior.`,
-      (industry) =>
-        `At this level people skim for judgment, not history. If your resume is a career walkthrough, you're handing them the wrong story.`,
+        `At this level a task-list resume actively works against you — it reads junior. In ${industry || "your field"}, the bar is a track record told through decisions and outcomes, not duties.`,
+      (industry, resumeType) =>
+        `Reviewers at your level skim ${RESUME_TYPE_LINE[resumeType]} for judgment and results, not a job history. Anything less reads as overqualified for the wrong reasons in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
-        `I'd build it around a few decisions that actually moved things, and let the rest fall away.`,
-      () =>
-        `I'd lead with the outcomes you're known for instead of marching through every title.`,
-      () =>
-        `I'd make your experience read as weight and judgment, not mileage.`,
+        `I write it around a handful of real decisions you've made in ${industry || "your field"}, not a long list of past titles.`,
+      (industry) =>
+        `I lead with the outcomes you're actually known for in ${industry || "your field"}, not a chronological walk through every job you've had.`,
     ],
   },
   exec: {
     stakes: [
       (industry) =>
-        `At your level the resume is a credibility test before it's a document. Read like an operator instead of a strategist and the call never comes.`,
+        `At the executive level, your resume is read by people evaluating judgment, not tasks. Anything less than a strategic document costs you credibility before the conversation even starts in ${industry || "your field"}.`,
       (industry, resumeType) =>
-        `A board or search partner decides in one glance whether you're worth a conversation. A duties-based resume loses that glance.`,
-      (industry) =>
-        `They're reading for the bets you made and what they returned. Anything that reads like a job history undersells the exact judgment they want.`,
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is likely the first and only thing a board or search partner sees before deciding you're worth a call in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
-        `I'd keep it built around the decisions you made and what came from them, which is really all a board reads for.`,
-      () =>
-        `I'd make it read like a strategic track record, not a list of responsibilities.`,
-      () =>
-        `I'd frame your career as a series of bets that paid off, because that's what gets the call.`,
+        `I focus on results, not a list of duties, since that's what people making hiring decisions in ${industry || "your field"} are actually looking for.`,
+      (industry) =>
+        `I keep it built around the calls you've made and what came from them in ${industry || "your field"}, since that's what a board or search partner actually reads for.`,
     ],
   },
   late_career: {
     stakes: [
       (industry) =>
-        `Decades of experience should be your edge. Listed as a full timeline, it just reads as dated instead.`,
-      (industry) =>
-        `The trap is the career-long resume. It buries the recent, relevant work that's the only part an employer is actually weighing.`,
-      (industry) =>
-        `You're not too experienced. Your resume is just showing all of it at once instead of the part that matters now.`,
+        `A resume that lists every role since the start of your career can read as dated instead of experienced to hiring managers in ${industry || "your field"}, even when the experience behind it is strong.`,
     ],
     edge: [
       (industry) =>
-        `I'd keep it tight around your last few roles and what you bring today, so you read as current, not historic.`,
-      () =>
-        `I'd foreground your recent, relevant wins and let the early history rest.`,
-      () =>
-        `I'd frame your experience as exactly what they need now, not a walk through everything you've done.`,
+        `I focus on your last few roles and what you bring today, instead of walking through your whole career history${industry ? ` in ${industry}` : ""}.`,
+      (industry) =>
+        `I keep it tight around your most recent, most relevant work${industry ? ` in ${industry}` : ""}, so it reads as current, not as a full career timeline.`,
     ],
   },
 };
@@ -579,24 +542,34 @@ function App() {
     const greeting = `Hi ${capitalizedName || "[Name]"},`;
     const me = yourName || "[Your Name]";
 
+    const hook = HOOKS[stage](resumeType);
+
     const stakesPool = L.stakes;
-    const observation = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
+    const stakes = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
+    const stakesLower = stakes.charAt(0).toLowerCase() + stakes.slice(1);
+    const openLine = `${hook} Here's the thing — ${stakesLower}`;
 
     const edgePool = L.edge;
-    const mechanism = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
+    let approach = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
+    const approachLower = approach.startsWith("I ") ? approach : approach.charAt(0).toLowerCase() + approach.slice(1);
+    const fixLine = `That's what I fix — ${approachLower}`;
 
-    const cta = "Send it over whenever and I'll tell you the two things I'd fix first. No cost, no pitch, just a straight read.";
+    const basePrice = (level === "manager" || level === "senior") ? 120 : 60;
+    const priceLine = `Starting at $${basePrice}, I professionally rewrite your resume and deliver it within 24 hours.`;
+    const bundleLine = "If you're updating more than just your resume, I also offer bundle packages that include a tailored cover letter and/or a professionally written LinkedIn profile.";
 
     return [
       greeting,
       "",
-      observation,
+      openLine,
       "",
-      mechanism,
+      fixLine,
       "",
-      cta,
+      priceLine,
       "",
-      "Best regards,",
+      bundleLine,
+      "",
+      "Want a quick teardown of the two things most likely holding your resume back right now? Send a copy of your resume over for a free review?",
       `— ${me}`,
     ].join("\n");
   }, [name, yourName, level, resumeType, stage, industry, variantSeed]);
