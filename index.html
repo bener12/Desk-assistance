@@ -120,7 +120,7 @@ const LEVEL_VOICE = {
   student: {
     stakes: [
       (industry, resumeType) =>
-        `You're up against candidates with the same degree and no way to stand out. A ${RESUME_TYPE_LINE[resumeType]} that just lists coursework gets skipped — recruiters in ${industry || "your field"} are scanning for signs of real capability, not a transcript.`,
+        `You're up against candidates with the same degree and no way to stand out. A ${RESUME_TYPE_LINE[resumeType]} that just lists coursework gets skipped, recruiters in ${industry || "your field"} are scanning for signs of real capability, not a transcript.`,
       (industry, resumeType) =>
         `Right now, nothing on ${RESUME_TYPE_LINE[resumeType]} separates you from every other new grad applying in ${industry || "your field"}. Recruiters give first resumes seconds, not minutes.`,
     ],
@@ -136,7 +136,7 @@ const LEVEL_VOICE = {
       (industry) =>
         `The gap between "recent grad" and "hired" is almost always the resume, not the person. Hiring managers in ${industry || "your field"} move fast, and a resume that reads like a school record won't get a second look.`,
       (industry, resumeType) =>
-        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week of applications going nowhere in ${industry || "your field"}. It's rarely the candidate — it's how they're presented on paper.`,
+        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week of applications going nowhere in ${industry || "your field"}. It's rarely the candidate, it's how they're presented on paper.`,
     ],
     edge: [
       (industry) =>
@@ -148,7 +148,7 @@ const LEVEL_VOICE = {
   entry: {
     stakes: [
       (industry) =>
-        `An ineffective resume costs you the next step up. Without proof of the results you've already driven, you get read as more of the same — not ready to grow in ${industry || "your field"}.`,
+        `An ineffective resume costs you the next step up. Without proof of the results you've already driven, you get read as more of the same, not ready to grow in ${industry || "your field"}.`,
       (industry, resumeType) =>
         `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} that lists duties instead of results keeps you competing for the same level role in ${industry || "your field"}, not the next one.`,
     ],
@@ -162,7 +162,7 @@ const LEVEL_VOICE = {
   mid: {
     stakes: [
       (industry) =>
-        `Missed interviews, lost time, opportunities that go elsewhere — that's what a resume listing duties instead of impact costs you in ${industry || "your field"}. Hiring managers move fast and standard materials won't get you noticed.`,
+        `Missed interviews, lost time, opportunities that go elsewhere, that's what a resume listing duties instead of impact costs you in ${industry || "your field"}. Hiring managers move fast and standard materials won't get you noticed.`,
       (industry, resumeType) =>
         `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is competing against candidates who lead with numbers. If yours leads with responsibilities instead, it's losing in ${industry || "your field"}.`,
     ],
@@ -176,9 +176,9 @@ const LEVEL_VOICE = {
   manager: {
     stakes: [
       (industry) =>
-        `At your level, a resume that undersells scope — team size, budget, ownership — reads as an individual contributor, not a leader. That mismatch costs ${industry || "your field"} candidates real opportunities.`,
+        `At your level, a resume that undersells scope, team size, budget, ownership, reads as an individual contributor, not a leader. That mismatch costs ${industry || "your field"} candidates real opportunities.`,
       (industry, resumeType) =>
-        `If ${RESUME_TYPE_LINE[resumeType]} doesn't lead with what you owned — not just what you did — it reads a level below where you actually operate in ${industry || "your field"}.`,
+        `If ${RESUME_TYPE_LINE[resumeType]} doesn't lead with what you owned, not just what you did, it reads a level below where you actually operate in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
@@ -190,7 +190,7 @@ const LEVEL_VOICE = {
   senior: {
     stakes: [
       (industry) =>
-        `At this level a task-list resume actively works against you — it reads junior. In ${industry || "your field"}, the bar is a track record told through decisions and outcomes, not duties.`,
+        `At this level a task-list resume actively works against you, it reads junior. In ${industry || "your field"}, the bar is a track record told through decisions and outcomes, not duties.`,
       (industry, resumeType) =>
         `Reviewers at your level skim ${RESUME_TYPE_LINE[resumeType]} for judgment and results, not a job history. Anything less reads as overqualified for the wrong reasons in ${industry || "your field"}.`,
     ],
@@ -542,17 +542,14 @@ function App() {
     const greeting = `Hi ${capitalizedName || "[Name]"},`;
     const me = yourName || "[Your Name]";
 
-    const hook = HOOKS[stage](resumeType);
-
     const stakesPool = L.stakes;
     const stakes = stakesPool[variantSeed % stakesPool.length](industry, resumeType, stage);
     const stakesLower = stakes.charAt(0).toLowerCase() + stakes.slice(1);
-    const openLine = `${hook} Here's the thing — ${stakesLower}`;
+    const openLine = `Here's the thing — ${stakesLower}`;
 
     const edgePool = L.edge;
     let approach = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
-    const approachLower = approach.startsWith("I ") ? approach : approach.charAt(0).toLowerCase() + approach.slice(1);
-    const fixLine = `That's what I fix — ${approachLower}`;
+    const fixLine = `That's what I fix. ${approach}`;
 
     const basePrice = (level === "manager" || level === "senior") ? 120 : 60;
     const priceLine = `Starting at $${basePrice}, I professionally rewrite your resume and deliver it within 24 hours.`;
@@ -570,7 +567,7 @@ function App() {
       bundleLine,
       "",
       "Want a quick teardown of the two things most likely holding your resume back right now? Send a copy of your resume over for a free review?",
-      `— ${me}`,
+      `${me}`,
     ].join("\n");
   }, [name, yourName, level, resumeType, stage, industry, variantSeed]);
 
