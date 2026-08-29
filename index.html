@@ -592,9 +592,16 @@ function App() {
     const edgePool = L.edge;
     const mechanism = edgePool[variantSeed % edgePool.length](industry, resumeType, stage);
 
-    const cta = "Want me to point out the two things most likely holding yours back? Send it over and I will take a look, free.";
+    const invitePool = [
+      "Before we even talk resumes, I would genuinely like to hear from you. What has been the most frustrating part of your job search so far?",
+      "But enough from me. What has been the hardest part of the whole job search for you lately? I would really like to know.",
+      "More than anything, I want to understand where you are stuck. What is the one thing about applying that has been wearing on you most?",
+    ];
+    const invite = invitePool[variantSeed % invitePool.length];
 
-    const riskReversal = "The review comes with no obligation. And if we do work together, every resume includes up to two rounds of revisions and my full 100% satisfaction guarantee, so you are never locked into something you are not happy with.";
+    const cta = "Sometimes just naming it makes the next step clearer. And whenever you are ready, you can send your resume over and I will point out the two things most likely holding it back, free and with no obligation.";
+
+    const riskReversal = "If we do end up working together, every resume includes up to two rounds of revisions and my full 100% satisfaction guarantee, so you are never locked into something you are not happy with.";
 
     return [
       greeting,
@@ -604,6 +611,8 @@ function App() {
       observation,
       "",
       mechanism,
+      "",
+      invite,
       "",
       cta,
       "",
