@@ -134,15 +134,15 @@ const LEVEL_VOICE = {
   recent_grad: {
     stakes: [
       (industry) =>
-        `The gap between "recent grad" and "hired" is almost always the resume, not the person. Hiring managers in ${industry || "your field"} move fast, and a resume that reads like a school record won't get a second look.`,
+        `The gap between "recent grad" and "hired" is almost always the resume, not you. Hiring managers in ${industry || "your field"} move fast, and a resume that reads like a school record won't get a second look.`,
       (industry, resumeType) =>
-        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week of applications going nowhere in ${industry || "your field"}. It's rarely the candidate, it's how they're presented on paper.`,
+        `Every week ${RESUME_TYPE_LINE[resumeType]} stays generic is a week your applications go nowhere in ${industry || "your field"}. It's rarely you, it's how you're coming across on paper.`,
     ],
     edge: [
       (industry) =>
         `I take your internships and coursework and shape them into something that reads like real experience${industry ? ` in ${industry}` : ""}, not a school record.`,
       (industry) =>
-        `I pull the strongest parts of your internships and schoolwork forward, so it reads like someone ready for a real job${industry ? ` in ${industry}` : ""}, not a recent grad checklist.`,
+        `I pull the strongest parts of your internships and schoolwork forward, so you read like someone ready for a real job${industry ? ` in ${industry}` : ""}, not a recent grad checklist.`,
     ],
   },
   entry: {
@@ -154,9 +154,9 @@ const LEVEL_VOICE = {
     ],
     edge: [
       (industry) =>
-        `I rebuild it around what you've actually accomplished so far${industry ? ` in ${industry}` : ""}, so it doesn't read like more of the same role you're already in.`,
+        `I rebuild your resume around what you've actually accomplished so far${industry ? ` in ${industry}` : ""}, so it doesn't read like more of the same role you're already in.`,
       (industry) =>
-        `I dig into what you've actually gotten done in your current role and lead with that${industry ? ` for ${industry}` : ""}, so it reads like someone ready to move up.`,
+        `I dig into what you've actually gotten done in your current role and lead with that${industry ? ` for ${industry}` : ""}, so you read like someone ready to move up.`,
     ],
   },
   mid: {
@@ -164,7 +164,7 @@ const LEVEL_VOICE = {
       (industry) =>
         `Missed interviews, lost time, opportunities that go elsewhere, that's what a resume listing duties instead of impact costs you in ${industry || "your field"}. Hiring managers move fast and standard materials won't get you noticed.`,
       (industry, resumeType) =>
-        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is competing against candidates who lead with numbers. If yours leads with responsibilities instead, it's losing in ${industry || "your field"}.`,
+        `${RESUME_TYPE_LINE[resumeType][0].toUpperCase()}${RESUME_TYPE_LINE[resumeType].slice(1)} is competing against people who lead with numbers. If yours leads with responsibilities instead, you're losing ground in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
@@ -192,11 +192,11 @@ const LEVEL_VOICE = {
       (industry) =>
         `At this level a task-list resume actively works against you, it reads junior. In ${industry || "your field"}, the bar is a track record told through decisions and outcomes, not duties.`,
       (industry, resumeType) =>
-        `Reviewers at your level skim ${RESUME_TYPE_LINE[resumeType]} for judgment and results, not a job history. Anything less reads as overqualified for the wrong reasons in ${industry || "your field"}.`,
+        `Reviewers at your level skim ${RESUME_TYPE_LINE[resumeType]} for judgment and results, not a job history. Anything less and you risk reading as overqualified for the wrong reasons in ${industry || "your field"}.`,
     ],
     edge: [
       (industry) =>
-        `I write it around a handful of real decisions you've made in ${industry || "your field"}, not a long list of past titles.`,
+        `I write your resume around a handful of real decisions you've made in ${industry || "your field"}, not a long list of past titles.`,
       (industry) =>
         `I lead with the outcomes you're actually known for in ${industry || "your field"}, not a chronological walk through every job you've had.`,
     ],
@@ -212,7 +212,7 @@ const LEVEL_VOICE = {
       (industry) =>
         `I focus on results, not a list of duties, since that's what people making hiring decisions in ${industry || "your field"} are actually looking for.`,
       (industry) =>
-        `I keep it built around the calls you've made and what came from them in ${industry || "your field"}, since that's what a board or search partner actually reads for.`,
+        `I keep your resume built around the calls you've made and what came from them in ${industry || "your field"}, since that's what a board or search partner actually reads for.`,
     ],
   },
   late_career: {
@@ -224,7 +224,7 @@ const LEVEL_VOICE = {
       (industry) =>
         `I focus on your last few roles and what you bring today, instead of walking through your whole career history${industry ? ` in ${industry}` : ""}.`,
       (industry) =>
-        `I keep it tight around your most recent, most relevant work${industry ? ` in ${industry}` : ""}, so it reads as current, not as a full career timeline.`,
+        `I keep your resume tight around your most recent, most relevant work${industry ? ` in ${industry}` : ""}, so it reads as current, not as a full career timeline.`,
     ],
   },
 };
