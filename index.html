@@ -554,6 +554,7 @@ function App() {
     const basePrice = (level === "manager" || level === "senior") ? 120 : 60;
     const priceLine = `Starting at $${basePrice}, I professionally rewrite your resume and deliver it within 24 hours.`;
     const bundleLine = "If you're updating more than just your resume, I also offer bundle packages that include a tailored cover letter and/or a professionally written LinkedIn profile.";
+    const riskReversal = "Every resume includes up to two rounds of revisions and my full 100% satisfaction guarantee.";
 
     return [
       greeting,
@@ -566,7 +567,11 @@ function App() {
       "",
       bundleLine,
       "",
+      riskReversal,
+      "",
       "Want a quick teardown of the two things most likely holding your resume back right now? Send a copy of your resume over for a free review?",
+      "",
+      "Best Regards,",
       `${me}`,
     ].join("\n");
   }, [name, yourName, level, resumeType, stage, industry, variantSeed]);
