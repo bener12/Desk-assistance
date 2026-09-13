@@ -293,7 +293,7 @@ const TONE_INSTRUCTION = {
 // Returns { detectedStage, reasoning, drafts: [strings] }. Auto-detects the
 // situation from the message unless a specific stage is forced, writes fresh
 // replies in Erika's voice, and can take the prior thread for context.
-async function generateAIResponse({ clientMessage, thread, forcedStageLabel, clientName, extraContext, tone, variants = 3 }) {
+async function generateAIResponse({ clientMessage, thread, forcedStageLabel, clientName, extraContext, tone, variants = 3, model }) {
   const stageMap = SITUATIONS.filter((s) => s.id !== "auto").map((s) => `${s.id}: ${s.label}`).join("\n");
 
   const task = `TASK
@@ -321,7 +321,7 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: model || "claude-sonnet-4-6",
       max_tokens: 1500,
       system: VOICE_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
@@ -556,6 +556,7 @@ function App() {
   const [aiMode, setAiMode] = useState(false);
   const [convo, setConvo] = useState([]); // running thread: {role:"client"|"me", text}
   const [respTone, setRespTone] = useState("default");
+  const [respModel, setRespModel] = useState("claude-sonnet-4-6");
   const [aiDrafts, setAiDrafts] = useState([]);
   const [aiDetected, setAiDetected] = useState("");
   const [aiReasoning, setAiReasoning] = useState("");
@@ -711,6 +712,7 @@ function App() {
         extraContext,
         tone: respTone,
         variants: 3,
+        model: respModel,
       });
       setAiDrafts(result.drafts);
       setAiDetected(result.detectedStage);
@@ -976,6 +978,22 @@ function App() {
                             background: respTone === t.id ? INK : "transparent", color: respTone === t.id ? PAPER : INK,
                             border: `1px solid ${INK}`,
                           }}>{t.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>MODEL</label>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {[
+                          { id: "claude-sonnet-4-6", label: "Sonnet (best quality)" },
+                          { id: "claude-haiku-4-5-20251001", label: "Haiku (faster, cheaper)" },
+                        ].map((mo) => (
+                          <button key={mo.id} onClick={() => setRespModel(mo.id)} style={{
+                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
+                            fontFamily: "'Courier New', monospace", fontSize: 12,
+                            background: respModel === mo.id ? INK : "transparent", color: respModel === mo.id ? PAPER : INK,
+                            border: `1px solid ${INK}`,
+                          }}>{mo.label}</button>
                         ))}
                       </div>
                     </div>
