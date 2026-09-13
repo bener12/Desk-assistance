@@ -321,7 +321,7 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 1500,
       system: VOICE_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
@@ -511,7 +511,7 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
       messages: [{ role: "user", content }],
     }),
