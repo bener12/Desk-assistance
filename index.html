@@ -892,6 +892,65 @@ function App() {
                 Pulled from your own past client messages — pick what's happening, fill in the specifics.
               </p>
 
+              {aiMode && (
+                <div style={{
+                  display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end",
+                  padding: "12px 14px", marginBottom: 18, borderRadius: 8,
+                  background: "#F0EAD8", border: "1px solid #D8D0BC",
+                }}>
+                  <div>
+                    <label style={labelStyle}>TONE</label>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[
+                        { id: "default", label: "Default" },
+                        { id: "shorter", label: "Shorter" },
+                        { id: "warmer", label: "Warmer" },
+                        { id: "firmer", label: "Firmer" },
+                      ].map((t) => (
+                        <button key={t.id} onClick={() => setRespTone(t.id)} style={{
+                          padding: "6px 11px", borderRadius: 6, cursor: "pointer",
+                          fontFamily: "'Courier New', monospace", fontSize: 12,
+                          background: respTone === t.id ? INK : "transparent", color: respTone === t.id ? PAPER : INK,
+                          border: `1px solid ${INK}`,
+                        }}>{t.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>MODEL</label>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[
+                        { id: "claude-sonnet-4-6", label: "Sonnet" },
+                        { id: "claude-haiku-4-5-20251001", label: "Haiku" },
+                      ].map((mo) => (
+                        <button key={mo.id} onClick={() => setRespModel(mo.id)} style={{
+                          padding: "6px 11px", borderRadius: 6, cursor: "pointer",
+                          fontFamily: "'Courier New', monospace", fontSize: 12,
+                          background: respModel === mo.id ? INK : "transparent", color: respModel === mo.id ? PAPER : INK,
+                          border: `1px solid ${INK}`,
+                        }}>{mo.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>OPTIONS</label>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[
+                        { on: true, label: "3 options" },
+                        { on: false, label: "1 reply" },
+                      ].map((o) => (
+                        <button key={String(o.on)} onClick={() => setRespMulti(o.on)} style={{
+                          padding: "6px 11px", borderRadius: 6, cursor: "pointer",
+                          fontFamily: "'Courier New', monospace", fontSize: 12,
+                          background: respMulti === o.on ? INK : "transparent", color: respMulti === o.on ? PAPER : INK,
+                          border: `1px solid ${INK}`,
+                        }}>{o.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div style={{ marginBottom: 16 }}>
                 <label style={labelStyle}>{aiMode && convo.length ? "THEIR NEXT MESSAGE" : "PASTE THEIR MESSAGE"}</label>
                 <textarea
@@ -963,56 +1022,6 @@ function App() {
                     <div>
                       <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
                       <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
-                    </div>
-                    <div>
-                      <label style={labelStyle}>TONE</label>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {[
-                          { id: "default", label: "Default" },
-                          { id: "shorter", label: "Shorter" },
-                          { id: "warmer", label: "Warmer" },
-                          { id: "firmer", label: "Firmer" },
-                        ].map((t) => (
-                          <button key={t.id} onClick={() => setRespTone(t.id)} style={{
-                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
-                            fontFamily: "'Courier New', monospace", fontSize: 12,
-                            background: respTone === t.id ? INK : "transparent", color: respTone === t.id ? PAPER : INK,
-                            border: `1px solid ${INK}`,
-                          }}>{t.label}</button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label style={labelStyle}>MODEL</label>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {[
-                          { id: "claude-sonnet-4-6", label: "Sonnet (best quality)" },
-                          { id: "claude-haiku-4-5-20251001", label: "Haiku (faster, cheaper)" },
-                        ].map((mo) => (
-                          <button key={mo.id} onClick={() => setRespModel(mo.id)} style={{
-                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
-                            fontFamily: "'Courier New', monospace", fontSize: 12,
-                            background: respModel === mo.id ? INK : "transparent", color: respModel === mo.id ? PAPER : INK,
-                            border: `1px solid ${INK}`,
-                          }}>{mo.label}</button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label style={labelStyle}>HOW MANY OPTIONS?</label>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {[
-                          { on: true, label: "3 options" },
-                          { on: false, label: "1 reply" },
-                        ].map((o) => (
-                          <button key={String(o.on)} onClick={() => setRespMulti(o.on)} style={{
-                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
-                            fontFamily: "'Courier New', monospace", fontSize: 12,
-                            background: respMulti === o.on ? INK : "transparent", color: respMulti === o.on ? PAPER : INK,
-                            border: `1px solid ${INK}`,
-                          }}>{o.label}</button>
-                        ))}
-                      </div>
                     </div>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <div style={{ flex: 1, minWidth: 120 }}>
