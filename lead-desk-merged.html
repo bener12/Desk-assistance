@@ -534,7 +534,7 @@ function verdict(score, max) {
 }
 
 function App() {
-  const [tab, setTab] = useState("screen");
+  const [tab, setTab] = useState("respond");
   const [signals, setSignals] = useState({});
   const [name, setName] = useState("");
   const [yourName, setYourName] = useState("");
@@ -783,9 +783,9 @@ function App() {
 
         <div style={{ display: "flex", gap: 4, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           {[
-            { id: "screen", label: "Check if real" },
-            { id: "propose", label: "Build proposal" },
             { id: "respond", label: "Respond to client" },
+            { id: "propose", label: "Build proposal" },
+            { id: "screen", label: "Check if real" },
             { id: "posts", label: "Post generator" },
             { id: "ranking", label: "Ranking template" },
           ].map((t) => (
