@@ -554,8 +554,7 @@ function App() {
   const [respCopied, setRespCopied] = useState(false);
   const [pastedClientMsg, setPastedClientMsg] = useState("");
   const [aiMode, setAiMode] = useState(false);
-  const [aiThreadText, setAiThreadText] = useState("");
-  const [respAiStage, setRespAiStage] = useState(""); // "" = auto-detect
+  const [convo, setConvo] = useState([]); // running thread: {role:"client"|"me", text}
   const [respTone, setRespTone] = useState("default");
   const [aiDrafts, setAiDrafts] = useState([]);
   const [aiDetected, setAiDetected] = useState("");
@@ -698,43 +697,18 @@ function App() {
     setTimeout(() => setRespCopied(false), 1600);
   };
 
-  const parseThread = (raw) => {
-    if (!raw || !raw.trim()) return [];
-    const out = [];
-    raw.split(/\n+/).forEach((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      const m = trimmed.match(/^(me|erika|client|them|they)\s*[:\-]\s*(.*)$/i);
-      if (m) {
-        const role = /^(me|erika)$/i.test(m[1]) ? "me" : "client";
-        out.push({ role, text: m[2] });
-      } else if (out.length) {
-        out[out.length - 1].text += " " + trimmed;
-      } else {
-        out.push({ role: "client", text: trimmed });
-      }
-    });
-    return out;
-  };
-
-  const runAIDraft = async () => {
-    if (!pastedClientMsg.trim()) {
-      setAiError("Paste the client's message first.");
-      return;
-    }
+  // Generate draft replies for the latest client turn, given the prior thread.
+  const genDrafts = async (thread, clientMessage) => {
     setAiLoading(true);
     setAiError("");
     try {
-      const forcedStageLabel = respAiStage ? (SITUATIONS.find((s) => s.id === respAiStage)?.label || "") : "";
-      const contextBits = [];
-      if (!respAiStage || respAiStage === "pricing") contextBits.push(`Pricing tiers if pricing comes up: Resume only $${respP1}, Resume + LinkedIn $${respP2}, Complete package $${respP3}.`);
-      if (respAiStage === "expedite" && respDay) contextBits.push(`Requested delivery: ${respDay}.`);
+      const extraContext = `Pricing tiers if pricing comes up: Resume only $${respP1}, Resume + LinkedIn $${respP2}, Complete package $${respP3}.`;
       const result = await generateAIResponse({
-        clientMessage: pastedClientMsg,
-        thread: parseThread(aiThreadText),
-        forcedStageLabel,
+        clientMessage,
+        thread,
+        forcedStageLabel: "",
         clientName: respClientName,
-        extraContext: contextBits.join(" "),
+        extraContext,
         tone: respTone,
         variants: 3,
       });
@@ -749,10 +723,45 @@ function App() {
     }
   };
 
-  const copyAIDraft = (idx) => {
-    copyText(aiDrafts[idx]);
+  // Add the client's new message to the thread and draft replies to it.
+  const submitClientMsg = () => {
+    const msg = pastedClientMsg.trim();
+    if (!msg) {
+      setAiError("Type the client's message first.");
+      return;
+    }
+    const prior = convo;
+    setConvo([...prior, { role: "client", text: msg }]);
+    setPastedClientMsg("");
+    setAiDrafts([]);
+    genDrafts(prior, msg);
+  };
+
+  // Re-draft options for the last (still-unanswered) client message.
+  const regenerateDrafts = () => {
+    if (!convo.length || convo[convo.length - 1].role !== "client") return;
+    genDrafts(convo.slice(0, -1), convo[convo.length - 1].text);
+  };
+
+  // Pick one draft as the reply you send: add it to the thread and copy it.
+  const pickDraft = (idx) => {
+    const chosen = aiDrafts[idx];
+    copyText(chosen);
+    setConvo((c) => [...c, { role: "me", text: chosen }]);
+    setAiDrafts([]);
+    setAiDetected("");
+    setAiReasoning("");
     setAiCopiedIdx(idx);
     setTimeout(() => setAiCopiedIdx((c) => (c === idx ? null : c)), 1600);
+  };
+
+  const resetConvo = () => {
+    setConvo([]);
+    setAiDrafts([]);
+    setPastedClientMsg("");
+    setAiDetected("");
+    setAiReasoning("");
+    setAiError("");
   };
 
   const selectStyle = { width: "100%", padding: "9px 10px", borderRadius: 4, border: "1px solid #D8D0BC", fontSize: 14, background: "#fff", color: INK };
@@ -881,11 +890,11 @@ function App() {
               </p>
 
               <div style={{ marginBottom: 16 }}>
-                <label style={labelStyle}>PASTE THEIR MESSAGE</label>
+                <label style={labelStyle}>{aiMode && convo.length ? "THEIR NEXT MESSAGE" : "PASTE THEIR MESSAGE"}</label>
                 <textarea
                   value={pastedClientMsg}
                   onChange={(e) => setPastedClientMsg(e.target.value)}
-                  placeholder="Paste exactly what the client said..."
+                  placeholder={aiMode && convo.length ? "Paste what the client replied..." : "Paste exactly what the client said..."}
                   style={{ ...selectStyle, minHeight: 90, fontFamily: "inherit", resize: "vertical" }}
                 />
               </div>
@@ -917,16 +926,37 @@ function App() {
 
               {aiMode && (
                 <div style={{ marginBottom: 20 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
-                    <div>
-                      <label style={labelStyle}>EARLIER MESSAGES IN THIS THREAD (OPTIONAL)</label>
-                      <textarea
-                        value={aiThreadText}
-                        onChange={(e) => setAiThreadText(e.target.value)}
-                        placeholder={"For context. One line each, e.g.\nClient: I need help with my resume\nMe: Kindly send a copy for a free review\nClient: sent it over"}
-                        style={{ ...selectStyle, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
-                      />
+                  {convo.length > 0 && (
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <label style={labelStyle}>CONVERSATION</label>
+                        <button onClick={resetConvo} style={{
+                          padding: "4px 10px", background: "transparent", color: "#8A8272", cursor: "pointer",
+                          border: "1px solid #D8D0BC", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 11,
+                        }}>Reset</button>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {convo.map((m, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: m.role === "me" ? "flex-end" : "flex-start" }}>
+                            <div style={{
+                              maxWidth: "80%", padding: "9px 12px", borderRadius: 10, whiteSpace: "pre-wrap",
+                              fontSize: 13.5, lineHeight: 1.5,
+                              background: m.role === "me" ? INK : "#fff",
+                              color: m.role === "me" ? PAPER : INK,
+                              border: m.role === "me" ? "none" : "1px solid #D8D0BC",
+                            }}>
+                              <div style={{ fontSize: 10, fontFamily: "'Courier New', monospace", opacity: 0.6, marginBottom: 3 }}>
+                                {m.role === "me" ? "YOU" : "CLIENT"}
+                              </div>
+                              {m.text}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
                     <div>
                       <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
                       <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
@@ -966,7 +996,7 @@ function App() {
                   </div>
 
                   <button
-                    onClick={runAIDraft}
+                    onClick={submitClientMsg}
                     disabled={aiLoading}
                     style={{
                       padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6,
@@ -974,7 +1004,7 @@ function App() {
                       opacity: aiLoading ? 0.6 : 1, marginBottom: 16,
                     }}
                   >
-                    {aiLoading ? "Drafting..." : aiDrafts.length ? "Regenerate options" : "Draft replies"}
+                    {aiLoading ? "Drafting..." : convo.length ? "Send their next message" : "Draft replies"}
                   </button>
 
                   {aiError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{aiError}</p>}
@@ -987,6 +1017,9 @@ function App() {
                           {aiReasoning ? ` — ${aiReasoning}` : ""}
                         </p>
                       )}
+                      <p style={{ fontSize: 11, color: "#8A8272", fontFamily: "'Courier New', monospace", marginBottom: 10 }}>
+                        Pick the one you'll send — it's copied and added to the conversation so the next reply keeps context.
+                      </p>
                       {aiDrafts.map((d, i) => (
                         <div key={i} style={{ position: "relative", marginBottom: 16 }}>
                           <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
@@ -994,20 +1027,31 @@ function App() {
                             {d}
                           </div>
                           <button
-                            onClick={() => copyAIDraft(i)}
+                            onClick={() => pickDraft(i)}
                             style={{
                               marginTop: 10, padding: "8px 14px", background: aiCopiedIdx === i ? SAFE : INK, color: PAPER,
                               border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                             }}
                           >
-                            {aiCopiedIdx === i ? "Copied" : "Copy this"}
+                            {aiCopiedIdx === i ? "Copied & saved" : "Use this reply"}
                           </button>
                         </div>
                       ))}
+                      <button
+                        onClick={regenerateDrafts}
+                        disabled={aiLoading}
+                        style={{
+                          padding: "8px 14px", background: "transparent", color: INK,
+                          border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12,
+                          cursor: aiLoading ? "default" : "pointer", opacity: aiLoading ? 0.6 : 1,
+                        }}
+                      >
+                        Regenerate options
+                      </button>
                     </div>
                   )}
-                  <p style={{ fontSize: 12, color: "#8A8272", marginTop: 4 }}>
-                    Drafted fresh from what they wrote, in Erika's voice — always read before sending.
+                  <p style={{ fontSize: 12, color: "#8A8272", marginTop: 14 }}>
+                    Drafted fresh in Erika's voice, with the whole conversation in mind — always read before sending.
                   </p>
                 </div>
               )}
