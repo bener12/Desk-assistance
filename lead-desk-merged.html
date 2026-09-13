@@ -557,6 +557,7 @@ function App() {
   const [convo, setConvo] = useState([]); // running thread: {role:"client"|"me", text}
   const [respTone, setRespTone] = useState("default");
   const [respModel, setRespModel] = useState("claude-sonnet-4-6");
+  const [respMulti, setRespMulti] = useState(true); // true = 3 options, false = 1
   const [aiDrafts, setAiDrafts] = useState([]);
   const [aiDetected, setAiDetected] = useState("");
   const [aiReasoning, setAiReasoning] = useState("");
@@ -711,7 +712,7 @@ function App() {
         clientName: respClientName,
         extraContext,
         tone: respTone,
-        variants: 3,
+        variants: respMulti ? 3 : 1,
         model: respModel,
       });
       setAiDrafts(result.drafts);
@@ -994,6 +995,22 @@ function App() {
                             background: respModel === mo.id ? INK : "transparent", color: respModel === mo.id ? PAPER : INK,
                             border: `1px solid ${INK}`,
                           }}>{mo.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>HOW MANY OPTIONS?</label>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {[
+                          { on: true, label: "3 options" },
+                          { on: false, label: "1 reply" },
+                        ].map((o) => (
+                          <button key={String(o.on)} onClick={() => setRespMulti(o.on)} style={{
+                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
+                            fontFamily: "'Courier New', monospace", fontSize: 12,
+                            background: respMulti === o.on ? INK : "transparent", color: respMulti === o.on ? PAPER : INK,
+                            border: `1px solid ${INK}`,
+                          }}>{o.label}</button>
                         ))}
                       </div>
                     </div>
