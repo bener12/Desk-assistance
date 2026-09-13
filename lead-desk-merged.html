@@ -928,13 +928,6 @@ function App() {
                       />
                     </div>
                     <div>
-                      <label style={labelStyle}>SITUATION</label>
-                      <select value={respAiStage} onChange={(e) => setRespAiStage(e.target.value)} style={selectStyle}>
-                        <option value="">Auto-detect from their message (recommended)</option>
-                        {SITUATIONS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-                      </select>
-                    </div>
-                    <div>
                       <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
                       <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
                     </div>
@@ -992,7 +985,6 @@ function App() {
                         <p style={{ fontSize: 12, color: "#5A5142", fontFamily: "'Courier New', monospace", marginBottom: 14 }}>
                           Detected: <strong>{(SITUATIONS.find((s) => s.id === aiDetected) || {}).label || aiDetected}</strong>
                           {aiReasoning ? ` — ${aiReasoning}` : ""}
-                          {!respAiStage ? " · wrong? set the situation above and regenerate." : ""}
                         </p>
                       )}
                       {aiDrafts.map((d, i) => (
