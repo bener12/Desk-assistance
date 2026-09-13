@@ -231,44 +231,98 @@ const LEVEL_VOICE = {
 
 // Distilled from Erika's real message history — used as the system prompt so replies
 // are genuinely drafted for what the client wrote, not picked from a fixed list.
-const VOICE_SYSTEM_PROMPT = `You are drafting a LinkedIn reply for Erika, a resume-writing specialist, replying to a client message. Match her real voice exactly:
+// Hard facts and policies pulled from Erika's real messages. The model must
+// never invent numbers or promises outside this set — it grounds accuracy.
+const PLAYBOOK = `FACTS AND POLICIES (never contradict or invent beyond these):
+- Pricing: Resume only $120. Resume + LinkedIn $180. Resume + Cover Letter + LinkedIn (complete package) $220. Alternate tiers seen: Basic (resume) $120, Standard (resume + cover letter) $150, Premium (resume + cover letter + LinkedIn) $180. Two resumes + two cover letters $300, often discounted to $250. Only offer a discount if the client raises budget; typical discounts $20-$100.
+- Payment: full payment upfront before any work begins. Invoice is sent to the client's email. Payment processor is UK-based; international fees may apply and should be disclosed on the invoice.
+- Turnaround: usually stated as 4 to 7 business days (varies by workload); can expedite to same-day or a named day when the client is in a hurry.
+- Revisions: up to two revisions after the initial draft (occasionally up to four). Guarantees 100% customer satisfaction and a refund policy for protection.
+- Communication: messaging only (LinkedIn or email). Does NOT do phone calls or phone consultations, ever. Reason given: she references written requirements more accurately than spoken ones.
+- Delivery: documents sent in both DOC/Word and PDF formats so the client can edit them later.
+- LinkedIn optimization: she provides a document with the recommended changes; the client copies and pastes it into their own profile. It improves headline, summary/About, and experience keywords to raise visibility, search appearances, and ranking. It is organic and works best with the client's consistent engagement.
+- Resume formats she recommends: combination format for experienced/executive professionals; functional format to handle career gaps or thin chronological history (e.g. long gaps, part-time/volunteer work).
+- ATS: an Applicant Tracking System scans, organizes, and ranks resumes against the job description. A resume "meets ATS standards" when formatting, keywords, and standard section titles let the software read and rank it.
+- Scope limits: resume service is for US and Canada only (she is not versed in other countries' ATS requirements) and she declines work outside that politely, referring them elsewhere.
+- No AI claim: she states she does NOT use AI; every resume is personally crafted. (Do not contradict this in the reply. Never mention that this reply itself was AI-drafted.)
+- Samples: she generally cannot share past client work due to confidentiality, but can send a neutral sample resume and points to her services page for testimonials.
+- To start: she asks for the current resume (even if outdated), the target job title/position, sometimes the job description, industry, and any recent achievements, certifications, or licenses.`;
 
-- Formal but warm. Opens with "Thank you for..." / "Thanks for sharing..." / "Kindly...". Never casual ("Hey", "Hiya").
-- States problems factually before offering the fix, e.g. "After reviewing your resume, I noticed it does not meet the standard required for the applicant tracking system." Diagnosis first, reassurance second.
-- Calm, firm boundaries on scope/policy (e.g. no phone calls, payment upfront) — polite but does not waver.
-- Reassurance uses specific, repeatable commitments: "100% customer satisfaction," "up to two revisions," never vague promises.
-- Sign-off is "Best regards," "Sincerely," "Thanks," or just her name — never casual sign-offs.
-- No em-dashes. Minimal to no exclamation marks. Contractions used sparingly (some "I'm", "I'd", but not heavily casual).
-- Never mentions AI, generic terms like "leverage" or "synergy," or filler enthusiasm.
-- Keep replies as short as the situation allows — most of her real replies are 1-4 sentences, occasionally longer only for detailed feedback or a full policy explanation.
-
-Here are real examples of her voice for grounding (do not copy these verbatim, use them only to match tone and structure):
-${[
+const VOICE_EXAMPLES = [
+  "Thanks for contacting me. I'm available for a chat and would be happy to review your resume. Kindly send a copy of your current resume here for a free review.",
   "After reviewing your resume, I noticed it does not meet the standards required for the applicant tracking system. However, I'm confident I can help transform it into a professional resume that truly stands out.",
+  "Thanks for sharing your resume with me. After a careful review, I noticed that while your resume effectively highlights your achievements and certifications, it could benefit from improved formatting and the use of ATS-compatible bullet points to break up dense text for better readability and impact.",
   "I don't offer phone consultations, but I'd be happy to answer any questions or concerns you have here.",
+  "Understood. The reason I prefer not to engage in phone calls is because I often miss important information when there is excessive discussion with clients. I find it easier to reference requirements from text messages.",
   "I understand your concern, and I want to assure you that I guarantee 100% customer satisfaction. You can request up to two revisions after receiving the initial draft to ensure it meets your expectations.",
-  "Thank you for sharing that. Please feel free to provide more details about your volunteer work, including your responsibilities and the impact of your involvement.",
+  "Due to confidentiality reasons, I am unable to share my work samples. However, I can assure you of full monetary protection and a commitment to 100% customer satisfaction.",
+  "I want to assure you that I do not use AI to write. Every resume I create is personally crafted with careful attention to detail, ensuring it highlights your unique skills, experiences, and accomplishments in a way that truly sets you apart.",
   "Full payment is required upfront. I'll send the invoice to your email address shortly.",
-  "I want to assure you that I do not use AI to write. Every resume I create is personally crafted with careful attention to detail.",
-].map((l) => `- ${l}`).join("\n")}
+  "I wanted to confirm if you've completed the payment, as I've been waiting to hear from you.",
+  "Below is a breakdown of my service fees:\n\nResume Only: $120\nResume and LinkedIn: $180\nResume + Cover Letter + LinkedIn: $220\n\nLet me know if you have any questions!",
+  "After reviewing your resume, I noticed that you are not based in the United States or Canada. Unfortunately, my resume writing service is limited to the US and Canada only, as I am not well-versed in the ATS requirements of your country. I recommend trying other writers who are more familiar with your country's requirements.",
+  "The career gap will be addressed using a functional resume format. I'll just need more details about your role and responsibilities, as well as the name of the organization where you volunteered.",
+  "The LinkedIn optimization service includes a full improvement on certain sections of your LinkedIn profile including the headline and summary to increase your profile visibility and ranking in search results for professionals in your field.",
+  "Thank you for choosing my resume writing service. I've attached your documents for your review. Please take a moment to check them, and I await your feedback.",
+  "Thank you for your feedback. I will make the necessary revisions to the resume and send you the updated version as soon as possible.",
+];
 
-Write ONE reply, addressed to what the client actually said. Do not add a subject line. Do not explain your reasoning — output only the reply text.`;
+const VOICE_SYSTEM_PROMPT = `You are drafting a LinkedIn or email reply for Erika, a professional resume-writing specialist, replying to a client or prospect. Match her real voice EXACTLY:
 
-async function generateAIResponse({ clientMessage, situationLabel, clientName, extraContext }) {
-  const userPrompt = [
-    situationLabel ? `Context: ${situationLabel}.` : "",
-    clientName ? `Client's name: ${clientName}.` : "",
-    extraContext || "",
-    `Client's message:\n"""${clientMessage}"""`,
-    "Draft Erika's reply.",
-  ].filter(Boolean).join("\n\n");
+- Formal but warm. Opens with "Thank you for..." / "Thanks for sharing..." / "Kindly..." / "I understand your concern...". Never casual ("Hey", "Hiya", "No worries").
+- States problems factually before offering the fix. Diagnosis first, reassurance second (e.g. "After reviewing your resume, I noticed it does not meet the standard required for the applicant tracking system. However, I'm confident I can help...").
+- Calm, firm boundaries on scope and policy (no phone calls, payment upfront, US/Canada only). Polite but never wavers or apologizes for the policy itself.
+- Reassurance uses specific, repeatable commitments: "100% customer satisfaction", "up to two revisions", "full payment required upfront" — never vague promises.
+- Sign-off is "Best regards,", "Sincerely,", "Thanks," or just her name — never casual sign-offs. Often no sign-off at all for short replies.
+- No em-dashes. Minimal to no exclamation marks. Contractions used sparingly.
+- Never mentions AI, and never uses filler business jargon ("leverage", "synergy", "circle back") or hollow enthusiasm.
+- Keep it as short as the situation allows. Most real replies are 1-4 sentences; only pricing, policy explanations, or detailed resume feedback run longer.
+
+${PLAYBOOK}
+
+Real examples of her voice for grounding (match tone and structure, do NOT copy verbatim):
+${VOICE_EXAMPLES.map((l) => `- ${l}`).join("\n")}`;
+
+const TONE_INSTRUCTION = {
+  default: "",
+  shorter: "Keep this especially short and direct — one or two sentences maximum.",
+  warmer: "Lean slightly warmer and more appreciative while staying professional.",
+  firmer: "Lean slightly firmer and more matter-of-fact on any policy or boundary, without becoming cold.",
+};
+
+// Returns { detectedStage, reasoning, drafts: [strings] }. Auto-detects the
+// situation from the message unless a specific stage is forced, writes fresh
+// replies in Erika's voice, and can take the prior thread for context.
+async function generateAIResponse({ clientMessage, thread, forcedStageLabel, clientName, extraContext, tone, variants = 3 }) {
+  const stageMap = SITUATIONS.filter((s) => s.id !== "auto").map((s) => `${s.id}: ${s.label}`).join("\n");
+
+  const task = `TASK
+1. Read the conversation and the client's latest message.
+2. Detect which stage of Erika's workflow this is (choose the closest id from the list below).
+3. Write ${variants} distinct reply options for the latest message, each fully in Erika's voice, each a complete reply she could send as-is. Vary the phrasing and structure between options, not the meaning. Address exactly what the client actually said; do not raise topics they didn't. Do not add a subject line.
+
+STAGE OPTIONS:
+${stageMap}
+${forcedStageLabel ? `\nThe user has forced this stage: "${forcedStageLabel}". Use it as the intent even if the message is ambiguous.` : ""}
+${clientName ? `\nClient's name: ${clientName}. You may open with it naturally.` : ""}
+${extraContext ? `\n${extraContext}` : ""}
+${tone && TONE_INSTRUCTION[tone] ? `\nTONE: ${TONE_INSTRUCTION[tone]}` : ""}
+
+Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact shape:
+{"detectedStage": "one stage id from the list", "reasoning": "one short sentence on why", "drafts": ["reply option 1", "reply option 2", "reply option 3"]}`;
+
+  const convo = (Array.isArray(thread) && thread.length)
+    ? `CONVERSATION SO FAR (oldest first):\n${thread.map((t) => `${t.role === "me" ? "Erika" : "Client"}: ${t.text}`).join("\n")}\n\n`
+    : "";
+
+  const userPrompt = `${convo}CLIENT'S LATEST MESSAGE:\n"""${clientMessage}"""\n\n${task}`;
 
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 1000,
+      max_tokens: 1500,
       system: VOICE_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
     }),
@@ -284,7 +338,17 @@ async function generateAIResponse({ clientMessage, situationLabel, clientName, e
     .join("\n")
     .trim();
   if (!text) throw new Error("Empty response");
-  return text;
+  const clean = text.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    // Fallback: treat the whole thing as a single draft so the user still gets something.
+    return { detectedStage: "", reasoning: "", drafts: [text] };
+  }
+  const drafts = Array.isArray(parsed.drafts) ? parsed.drafts.filter((d) => d && d.trim()) : [];
+  if (!drafts.length) throw new Error("Empty response");
+  return { detectedStage: parsed.detectedStage || "", reasoning: parsed.reasoning || "", drafts };
 }
 
 // Phrase bank pulled directly from Erika's own past client messages — reused and
@@ -342,6 +406,32 @@ const RESPONSE_BANK = {
     () => `I understand your concern, and I want to assure you that I guarantee 100% customer satisfaction. You can request up to two revisions after receiving the initial draft to ensure it meets your expectations.`,
     () => `Rest assured, when you use my service, your order is protected by a refund policy to ensure your satisfaction.`,
   ],
+  noAI: [
+    () => `I want to assure you that I do not use AI to write. Every resume I create is personally crafted with careful attention to detail, ensuring it highlights your unique skills, experiences, and accomplishments in a way that truly sets you apart.`,
+  ],
+  samples: [
+    () => `Due to confidentiality reasons, I am unable to share my work samples. However, I can assure you of full monetary protection and a commitment to 100% customer satisfaction.`,
+    () => `I've attached a sample resume for you to review. Rest assured that I always strive to provide my clients with 100% satisfaction and offer up to two revisions if needed to ensure that you are completely happy with the end result.`,
+  ],
+  linkedinOptExplain: [
+    () => `The LinkedIn optimization service includes a full improvement on certain sections of your LinkedIn profile including the headline and summary to increase your profile visibility and ranking in search results for professionals in your field.`,
+    () => `I will provide you with a document containing the necessary changes. You can then simply copy the content from the document and paste it onto your LinkedIn profile to update it accordingly.`,
+  ],
+  functionalGap: [
+    () => `Given the gap, a functional resume would be a great option. This format focuses on your skills and strengths rather than a chronological timeline. I'll just need more details about your role and responsibilities, along with any volunteer experience or other relevant skills you'd like highlighted.`,
+    () => `The career gap will be addressed using a functional resume format. I'll just need more details about your role and responsibilities, as well as the name of the organization where you volunteered.`,
+  ],
+  workTurnedDown: [
+    () => `After reviewing your resume, I noticed that you are not based in the United States or Canada. Unfortunately, my resume writing service is limited to the US and Canada only, as I am not well-versed in the ATS requirements of your country. I recommend trying other writers who are more familiar with your country's requirements.`,
+  ],
+  refund: [
+    () => `I understand your concern. Rest assured, when you use my service, your order is protected by a refund policy to ensure your satisfaction.`,
+    () => `I've processed your refund, and it should arrive within three to five business days.`,
+  ],
+  revisionFeedback: [
+    () => `Thank you for your feedback. I will make the necessary revisions to the resume and send you the updated version as soon as possible.`,
+    () => `Thank you for your feedback. Yes, the documents I sent are in a format that allows for easy editing and adjustments on your side. I will make the necessary revisions and send you the updated version as soon as possible.`,
+  ],
   delivery: [
     () => `Thank you for choosing my resume writing service. I've attached your documents for your review. Please take a moment to check them, and I await your feedback.`,
     () => `I have finished writing your resume and just need to do some proofreading. I will send it to you shortly.`,
@@ -365,7 +455,14 @@ const SITUATIONS = [
   { id: "paymentRequest", label: "Ready to start — request payment" },
   { id: "paymentFollowUp", label: "Follow up on unpaid invoice" },
   { id: "reassurance", label: "They're hesitant — reassure them" },
+  { id: "noAI", label: "They ask if you use AI — reassure it's hand-written" },
+  { id: "samples", label: "They ask for work samples" },
+  { id: "linkedinOptExplain", label: "Explain what LinkedIn optimization includes" },
+  { id: "functionalGap", label: "Career gap — recommend functional format" },
+  { id: "workTurnedDown", label: "Outside US/Canada — decline politely" },
+  { id: "refund", label: "Refund / money-back reassurance" },
   { id: "delivery", label: "Delivering the finished document" },
+  { id: "revisionFeedback", label: "They gave feedback — confirm revisions" },
   { id: "expedite", label: "They want it rushed — confirm expedited timeline" },
 ];
 
@@ -457,10 +554,15 @@ function App() {
   const [respCopied, setRespCopied] = useState(false);
   const [pastedClientMsg, setPastedClientMsg] = useState("");
   const [aiMode, setAiMode] = useState(false);
-  const [aiDraft, setAiDraft] = useState("");
+  const [aiThreadText, setAiThreadText] = useState("");
+  const [respAiStage, setRespAiStage] = useState(""); // "" = auto-detect
+  const [respTone, setRespTone] = useState("default");
+  const [aiDrafts, setAiDrafts] = useState([]);
+  const [aiDetected, setAiDetected] = useState("");
+  const [aiReasoning, setAiReasoning] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiCopied, setAiCopied] = useState(false);
+  const [aiCopiedIdx, setAiCopiedIdx] = useState(null);
 
   const [postTask, setPostTask] = useState("rewrite");
   const [postNiche, setPostNiche] = useState("Resume writing / career coaching");
@@ -596,6 +698,25 @@ function App() {
     setTimeout(() => setRespCopied(false), 1600);
   };
 
+  const parseThread = (raw) => {
+    if (!raw || !raw.trim()) return [];
+    const out = [];
+    raw.split(/\n+/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      const m = trimmed.match(/^(me|erika|client|them|they)\s*[:\-]\s*(.*)$/i);
+      if (m) {
+        const role = /^(me|erika)$/i.test(m[1]) ? "me" : "client";
+        out.push({ role, text: m[2] });
+      } else if (out.length) {
+        out[out.length - 1].text += " " + trimmed;
+      } else {
+        out.push({ role: "client", text: trimmed });
+      }
+    });
+    return out;
+  };
+
   const runAIDraft = async () => {
     if (!pastedClientMsg.trim()) {
       setAiError("Paste the client's message first.");
@@ -604,17 +725,23 @@ function App() {
     setAiLoading(true);
     setAiError("");
     try {
-      const situationLabel = SITUATIONS.find((s) => s.id === respSituation)?.label || "";
-      const extraContext =
-        respSituation === "pricing" ? `Pricing tiers: Resume $${respP1}, Resume+LinkedIn $${respP2}, Full package $${respP3}.` :
-        respSituation === "expedite" ? `Requested delivery: ${respDay || "not specified"}.` : "";
-      const draft = await generateAIResponse({
+      const forcedStageLabel = respAiStage ? (SITUATIONS.find((s) => s.id === respAiStage)?.label || "") : "";
+      const contextBits = [];
+      if (!respAiStage || respAiStage === "pricing") contextBits.push(`Pricing tiers if pricing comes up: Resume only $${respP1}, Resume + LinkedIn $${respP2}, Complete package $${respP3}.`);
+      if (respAiStage === "expedite" && respDay) contextBits.push(`Requested delivery: ${respDay}.`);
+      const result = await generateAIResponse({
         clientMessage: pastedClientMsg,
-        situationLabel,
+        thread: parseThread(aiThreadText),
+        forcedStageLabel,
         clientName: respClientName,
-        extraContext,
+        extraContext: contextBits.join(" "),
+        tone: respTone,
+        variants: 3,
       });
-      setAiDraft(draft);
+      setAiDrafts(result.drafts);
+      setAiDetected(result.detectedStage);
+      setAiReasoning(result.reasoning);
+      setAiCopiedIdx(null);
     } catch (e) {
       setAiError("Couldn't generate a reply — check connection and try again.");
     } finally {
@@ -622,10 +749,10 @@ function App() {
     }
   };
 
-  const copyAIDraft = () => {
-    copyText(aiDraft);
-    setAiCopied(true);
-    setTimeout(() => setAiCopied(false), 1600);
+  const copyAIDraft = (idx) => {
+    copyText(aiDrafts[idx]);
+    setAiCopiedIdx(idx);
+    setTimeout(() => setAiCopiedIdx((c) => (c === idx ? null : c)), 1600);
   };
 
   const selectStyle = { width: "100%", padding: "9px 10px", borderRadius: 4, border: "1px solid #D8D0BC", fontSize: 14, background: "#fff", color: INK };
@@ -792,9 +919,18 @@ function App() {
                 <div style={{ marginBottom: 20 }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
                     <div>
-                      <label style={labelStyle}>SITUATION (HELPS THE DRAFT, OPTIONAL)</label>
-                      <select value={respSituation} onChange={(e) => setRespSituation(e.target.value)} style={selectStyle}>
-                        <option value="">No specific situation</option>
+                      <label style={labelStyle}>EARLIER MESSAGES IN THIS THREAD (OPTIONAL)</label>
+                      <textarea
+                        value={aiThreadText}
+                        onChange={(e) => setAiThreadText(e.target.value)}
+                        placeholder={"For context. One line each, e.g.\nClient: I need help with my resume\nMe: Kindly send a copy for a free review\nClient: sent it over"}
+                        style={{ ...selectStyle, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>SITUATION</label>
+                      <select value={respAiStage} onChange={(e) => setRespAiStage(e.target.value)} style={selectStyle}>
+                        <option value="">Auto-detect from their message (recommended)</option>
                         {SITUATIONS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                       </select>
                     </div>
@@ -802,28 +938,38 @@ function App() {
                       <label style={labelStyle}>THEIR NAME (OPTIONAL)</label>
                       <input value={respClientName} onChange={(e) => setRespClientName(e.target.value)} placeholder="e.g. Simone" style={selectStyle} />
                     </div>
-                    {respSituation === "pricing" && (
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ flex: 1, minWidth: 140 }}>
-                          <label style={labelStyle}>RESUME ONLY</label>
-                          <input value={respP1} onChange={(e) => setRespP1(e.target.value)} style={selectStyle} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 140 }}>
-                          <label style={labelStyle}>+ LINKEDIN</label>
-                          <input value={respP2} onChange={(e) => setRespP2(e.target.value)} style={selectStyle} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 140 }}>
-                          <label style={labelStyle}>+ COVER LETTER</label>
-                          <input value={respP3} onChange={(e) => setRespP3(e.target.value)} style={selectStyle} />
-                        </div>
+                    <div>
+                      <label style={labelStyle}>TONE</label>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {[
+                          { id: "default", label: "Default" },
+                          { id: "shorter", label: "Shorter" },
+                          { id: "warmer", label: "Warmer" },
+                          { id: "firmer", label: "Firmer" },
+                        ].map((t) => (
+                          <button key={t.id} onClick={() => setRespTone(t.id)} style={{
+                            padding: "7px 12px", borderRadius: 6, cursor: "pointer",
+                            fontFamily: "'Courier New', monospace", fontSize: 12,
+                            background: respTone === t.id ? INK : "transparent", color: respTone === t.id ? PAPER : INK,
+                            border: `1px solid ${INK}`,
+                          }}>{t.label}</button>
+                        ))}
                       </div>
-                    )}
-                    {respSituation === "expedite" && (
-                      <div>
-                        <label style={labelStyle}>DELIVERY DAY</label>
-                        <input value={respDay} onChange={(e) => setRespDay(e.target.value)} placeholder="e.g. Wednesday, today" style={selectStyle} />
+                    </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ flex: 1, minWidth: 120 }}>
+                        <label style={labelStyle}>RESUME ONLY ($)</label>
+                        <input value={respP1} onChange={(e) => setRespP1(e.target.value)} style={selectStyle} />
                       </div>
-                    )}
+                      <div style={{ flex: 1, minWidth: 120 }}>
+                        <label style={labelStyle}>+ LINKEDIN ($)</label>
+                        <input value={respP2} onChange={(e) => setRespP2(e.target.value)} style={selectStyle} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 120 }}>
+                        <label style={labelStyle}>COMPLETE ($)</label>
+                        <input value={respP3} onChange={(e) => setRespP3(e.target.value)} style={selectStyle} />
+                      </div>
+                    </div>
                   </div>
 
                   <button
@@ -835,39 +981,40 @@ function App() {
                       opacity: aiLoading ? 0.6 : 1, marginBottom: 16,
                     }}
                   >
-                    {aiLoading ? "Drafting..." : "Draft reply"}
+                    {aiLoading ? "Drafting..." : aiDrafts.length ? "Regenerate options" : "Draft replies"}
                   </button>
 
                   {aiError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{aiError}</p>}
 
-                  {aiDraft && (
-                    <div style={{ position: "relative" }}>
-                      <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
-                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>AI DRAFT</div>
-                        {aiDraft}
-                      </div>
-                      <button
-                        onClick={copyAIDraft}
-                        style={{
-                          marginTop: 12, padding: "9px 16px", background: aiCopied ? SAFE : INK, color: PAPER,
-                          border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
-                        }}
-                      >
-                        {aiCopied ? "Copied" : "Copy draft"}
-                      </button>
-                      <button
-                        onClick={runAIDraft}
-                        disabled={aiLoading}
-                        style={{
-                          marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
-                          border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
-                        }}
-                      >
-                        Regenerate
-                      </button>
+                  {aiDrafts.length > 0 && (
+                    <div>
+                      {aiDetected && (
+                        <p style={{ fontSize: 12, color: "#5A5142", fontFamily: "'Courier New', monospace", marginBottom: 14 }}>
+                          Detected: <strong>{(SITUATIONS.find((s) => s.id === aiDetected) || {}).label || aiDetected}</strong>
+                          {aiReasoning ? ` — ${aiReasoning}` : ""}
+                          {!respAiStage ? " · wrong? set the situation above and regenerate." : ""}
+                        </p>
+                      )}
+                      {aiDrafts.map((d, i) => (
+                        <div key={i} style={{ position: "relative", marginBottom: 16 }}>
+                          <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                            <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>OPTION {i + 1}</div>
+                            {d}
+                          </div>
+                          <button
+                            onClick={() => copyAIDraft(i)}
+                            style={{
+                              marginTop: 10, padding: "8px 14px", background: aiCopiedIdx === i ? SAFE : INK, color: PAPER,
+                              border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                            }}
+                          >
+                            {aiCopiedIdx === i ? "Copied" : "Copy this"}
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
-                  <p style={{ fontSize: 12, color: "#8A8272", marginTop: 14 }}>
+                  <p style={{ fontSize: 12, color: "#8A8272", marginTop: 4 }}>
                     Drafted fresh from what they wrote, in Erika's voice — always read before sending.
                   </p>
                 </div>
