@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   body { overflow-x: hidden; }
@@ -613,29 +614,38 @@ function resumeReviewToText(r) {
   return lines.join("\n");
 }
 
-// Word opens HTML saved with a .doc extension, so this gives a formatted,
-// editable download without a docx library.
-function downloadResumeReviewDoc(r) {
-  const esc = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const h = (t) => `<p style="font-weight:bold;margin:18pt 0 6pt">${esc(t)}</p>`;
-  const body = [
-    `<p style="text-align:center;font-weight:bold;font-size:16pt;margin:0">${esc(r.industry)} RESUME REVIEW</p>`,
-    `<p style="margin:12pt 0 0"><b>For:</b> ${esc(r.clientName)}</p>`,
-    `<p style="margin:0 0 12pt"><b>Prepared By:</b> Resume Reviewer</p>`,
-    `<p>${esc(r.intro)}</p>`,
-    ...resumeReviewSections(r).map((s, i) => h(`${i + 1}) ${s.headline}`) + `<p>${esc(s.body)}</p>`),
-    h("FINAL DIAGNOSIS") + `<p>${esc(r.diagnosis)}</p>`,
-    h("BOTTOM LINE") + `<p>${esc(r.bottomLine)}</p>`,
-  ].join("");
-  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>Resume Review</title></head><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.4">${body}</body></html>`;
-  const blob = new Blob(["﻿", html], { type: "application/msword" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${(r.clientName || "client").replace(/[^\w]+/g, "_")}_${(r.industry || "").toLowerCase().replace(/[^\w]+/g, "_")}_resume_review.doc`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+// Builds a letter-size PDF of the review with jsPDF, wrapping text and
+// adding pages as needed.
+function downloadResumeReviewPdf(r) {
+  const doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+  const margin = 60, width = doc.internal.pageSize.getWidth() - margin * 2, bottom = doc.internal.pageSize.getHeight() - margin;
+  let y = margin;
+  // jsPDF's built-in fonts are Latin-1 only, so swap smart punctuation.
+  const clean = (t) => String(t || "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...");
+  const write = (text, { bold = false, size = 11, align = "left", gap = 6 } = {}) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    const lineH = size * 1.4;
+    doc.splitTextToSize(clean(text), width).forEach((line) => {
+      if (y + lineH > bottom) { doc.addPage(); y = margin; }
+      doc.text(line, align === "center" ? margin + width / 2 : margin, y, { align });
+      y += lineH;
+    });
+    y += gap;
+  };
+  write(`${r.industry} RESUME REVIEW`, { bold: true, size: 16, align: "center", gap: 14 });
+  write(`For: ${r.clientName}`, { gap: 0 });
+  write("Prepared By: Resume Reviewer", { gap: 12 });
+  write(r.intro, { gap: 12 });
+  resumeReviewSections(r).forEach((s, i) => {
+    write(`${i + 1}) ${s.headline}`, { bold: true, gap: 2 });
+    write(s.body, { gap: 12 });
+  });
+  write("FINAL DIAGNOSIS", { bold: true, gap: 2 });
+  write(r.diagnosis, { gap: 12 });
+  write("BOTTOM LINE", { bold: true, gap: 2 });
+  write(r.bottomLine);
+  doc.save(`${(r.clientName || "client").replace(/[^\w]+/g, "_")}_${(r.industry || "").toLowerCase().replace(/[^\w]+/g, "_")}_resume_review.pdf`);
 }
 
 function verdict(score, max) {
@@ -1588,10 +1598,10 @@ function App() {
                       padding: "9px 16px", background: rvCopied ? SAFE : INK, color: PAPER, border: "none",
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>{rvCopied ? "Copied" : "Copy review"}</button>
-                    <button onClick={() => downloadResumeReviewDoc(rvResult)} style={{
+                    <button onClick={() => downloadResumeReviewPdf(rvResult)} style={{
                       padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
-                    }}>Download Word doc</button>
+                    }}>Download PDF</button>
                     <button onClick={runResumeReview} disabled={rvLoading} style={{
                       padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
