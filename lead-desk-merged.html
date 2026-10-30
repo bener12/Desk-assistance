@@ -672,7 +672,7 @@ function downloadResumeReviewPdf(r) {
   doc.save(`${(r.clientName || "client").replace(/[^\w]+/g, "_")}_${(r.industry || "").toLowerCase().replace(/[^\w]+/g, "_")}_resume_review.pdf`);
 }
 
-async function callClaudeJSON(content, { model = "claude-sonnet-4-6", max_tokens = 2000 } = {}) {
+async function callClaudeText(content, { model = "claude-sonnet-4-6", max_tokens = 2000 } = {}) {
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -683,8 +683,17 @@ async function callClaudeJSON(content, { model = "claude-sonnet-4-6", max_tokens
     throw new Error(err.error || `Request failed (${res.status})`);
   }
   const data = await res.json();
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
+  if (data.error) throw new Error(data.error.message || data.error);
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+}
+
+// Pulls the JSON object out of a reply even if the model wraps it in fences
+// or a sentence of preamble.
+async function callClaudeJSON(content, opts) {
+  const text = await callClaudeText(content, opts);
+  const start = text.indexOf("{"), end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) throw new Error("The AI reply wasn't in the expected format.");
+  return JSON.parse(text.slice(start, end + 1));
 }
 
 // Monday-Friday funnel used for every weekly strategy: awareness -> teach ->
@@ -727,9 +736,10 @@ ${isMonday ? `\nThis is the anchor post that opens the week. Base it closely on 
 ${keywords ? `Naturally weave in these keywords: ${keywords}.` : ""}
 Write in a human, first-person voice with short paragraphs and line breaks suited to LinkedIn. No hashtag spam (max 3 at the end).
 
-Respond ONLY with valid JSON, no markdown fences, in this exact shape:
-{"post": "the full post"}`;
-  return callClaudeJSON([{ type: "text", text }], { max_tokens: 1800 });
+Respond with ONLY the post text itself, ready to paste into LinkedIn: no title, no preamble, no notes, no markdown.`;
+  const post = await callClaudeText([{ type: "text", text }], { max_tokens: 1800 });
+  if (!post) throw new Error("The AI returned an empty post.");
+  return { post };
 }
 
 function weeklyPlanToText(plan, posts) {
@@ -856,7 +866,7 @@ function App() {
       setWkId(id);
       setSavedWeeks((list) => [{ id, savedAt: id, niche: postNiche, keywords: postKeywords, anchor: postResult, plan, posts: {} }, ...list].slice(0, HISTORY_LIMIT));
     } catch (e) {
-      setWkError("Couldn't build the week — check connection and try again.");
+      setWkError(`Couldn't build the week (${e.message}) — try again.`);
     } finally {
       setWkLoading(false);
     }
@@ -870,7 +880,7 @@ function App() {
       setWkPosts((p) => ({ ...p, [i]: r }));
       setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
     } catch (e) {
-      setWkError(`Couldn't write ${wkPlan.days[i].day}'s post — try again.`);
+      setWkError(`Couldn't write ${wkPlan.days[i].day}'s post (${e.message}) — try again.`);
     } finally {
       setWkBusy((b) => ({ ...b, [i]: null }));
     }
