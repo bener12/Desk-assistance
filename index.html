@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   body { overflow-x: hidden; }
@@ -526,6 +527,117 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
   return JSON.parse(clean);
 }
 
+// Benchmark of what a strong resume looks like (house style). The reviewer
+// judges uploaded resumes against this standard.
+const RESUME_BENCHMARK = `- Header: name, then one contact line (location | phone | email | LinkedIn).
+- Target title line in caps with two pipe-separated roles (e.g. "SENIOR ACCOUNT EXECUTIVE | DIRECTOR OF SALES & ACCOUNT EXPANSION").
+- One-sentence positioning statement under the title ("Driving X, Y, and Z, accelerating...").
+- One dense professional summary paragraph: seniority, industries, proven track record, differentiators.
+- Three core competency pillars, each a bolded heading followed by one explanatory sentence.
+- "Area of Expertise": ~30 pipe-separated keywords on one line.
+- Career History: "Title | Company, City, ST" with dates; about five bullets per role, each action -> context/method -> outcome, with metrics wherever they exist (e.g. "exceeded $20K MRR quotas") and promotions called out.
+- Education and Technical Skills last, kept brief.
+- Keyword density is GOOD and intentional. Only criticize keywords when they are not backed by real experience, results, or context, or when the exact same phrases are repeated verbatim so the document reads robotic or inauthentic.`;
+
+const RESUME_REVIEW_EXAMPLE = `MANUFACTURING RESUME REVIEW / For: Sabine Oster
+Intro: This is an evaluation of your resume, focused on whether it positions you as a strong manufacturing candidate for mechanical assembly, fabrication, cable technician, production, and manufacturing operations roles.
+1) HIGH-LEVEL VERDICT: Your resume does a much better job than most manufacturing resumes at showing hands-on technical capability... However, the resume currently feels overwritten... The issue is not lack of experience — it is that the resume sometimes reads more like a staffing-agency marketing document than a natural manufacturing resume.
+2) TOO MANY KEYWORDS REDUCE CREDIBILITY: [names the exact repeated phrases, explains the two problems this creates, says what a cleaner presentation would achieve]
+3) EXPERIENCE SECTION NEEDS MORE MEASURABLE RESULTS: [duties vs outcomes; lists the metrics recruiters in this field want]
+4) LEADERSHIP EXPERIENCE FEELS DISCONNECTED: [what the background shows, why recruiters will be confused, what positioning is missing]
+5) SUMMARY SECTION IS TOO LONG: [what's good, what's overloaded, what a stronger summary would focus on]
+FINAL DIAGNOSIS: You have a legitimate and marketable background with... However, the resume currently... The strongest improvement would be...
+BOTTOM LINE: You ARE qualified for [roles]. Your resume simply needs [fixes] to appear more credible and competitive... With a more streamlined presentation, this resume could become much stronger for [specific roles].`;
+
+async function generateResumeReview({ clientName, targetRoles, resumeText, pdfBase64 }) {
+  const instructions = `You are a senior professional resume writer reviewing a prospective client's resume. Write a diagnostic review that is direct, specific, and encouraging, in the voice of a consultant: it should make the client trust your expertise and see why a professional rewrite is worth it.
+
+BENCHMARK — what a strong resume looks like in our house style:
+${RESUME_BENCHMARK}
+
+EXAMPLE of the review's structure and tone (match it closely):
+${RESUME_REVIEW_EXAMPLE}
+
+Rules:
+- Infer the client's industry/field and the roles they're targeting from the resume${targetRoles ? `; the user says they are targeting: ${targetRoles}` : ""}.
+- Write in second person ("Your resume..."). Flowing paragraphs only — no bullet lists, no scores.
+- Every finding must cite specific details from THIS resume (real titles, employers, phrases, skills). Never generic advice.
+- The verdict opens with genuine strengths, then names the core issue in one sharp sentence.
+- Give 3-6 findings after the verdict, each with a punchy ALL-CAPS headline that states the problem, followed by one paragraph: evidence from the resume, why it hurts them with recruiters/hiring managers, and what better looks like.
+- Bottom line starts with "You ARE qualified for..." and ends naming specific roles the resume could win once fixed.
+- Plain text, no markdown.
+
+Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact shape:
+{"industry": "ONE OR TWO WORD FIELD IN CAPS, e.g. MANUFACTURING", "clientName": "client's full name from the resume", "intro": "This is an evaluation of your resume, focused on whether it positions you as a strong ... candidate for ... roles.", "verdict": "high-level verdict paragraph", "findings": [{"headline": "ALL CAPS HEADLINE", "body": "paragraph"}], "diagnosis": "final diagnosis paragraph", "bottomLine": "bottom line paragraph"}`;
+
+  const content = [];
+  if (pdfBase64) {
+    content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } });
+    content.push({ type: "text", text: instructions });
+  } else {
+    content.push({ type: "text", text: instructions + `\n\nRESUME:\n"""${resumeText}"""` });
+  }
+
+  const res = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Request failed (${res.status})`);
+  }
+  const data = await res.json();
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+  const clean = text.replace(/```json|```/g, "").trim();
+  const review = JSON.parse(clean);
+  if (clientName) review.clientName = clientName;
+  return review;
+}
+
+function resumeReviewSections(r) {
+  return [
+    { headline: "HIGH-LEVEL VERDICT", body: r.verdict },
+    ...(r.findings || []),
+  ];
+}
+
+function resumeReviewToText(r) {
+  const lines = [`${r.industry} RESUME REVIEW`, `For: ${r.clientName}`, "Prepared By: Resume Reviewer", "", r.intro, ""];
+  resumeReviewSections(r).forEach((s, i) => { lines.push(`${i + 1}) ${s.headline}`, s.body, ""); });
+  lines.push("FINAL DIAGNOSIS", r.diagnosis, "", "BOTTOM LINE", r.bottomLine);
+  return lines.join("\n");
+}
+
+// Word opens HTML saved with a .doc extension, so this gives a formatted,
+// editable download without a docx library.
+function downloadResumeReviewDoc(r) {
+  const esc = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const h = (t) => `<p style="font-weight:bold;margin:18pt 0 6pt">${esc(t)}</p>`;
+  const body = [
+    `<p style="text-align:center;font-weight:bold;font-size:16pt;margin:0">${esc(r.industry)} RESUME REVIEW</p>`,
+    `<p style="margin:12pt 0 0"><b>For:</b> ${esc(r.clientName)}</p>`,
+    `<p style="margin:0 0 12pt"><b>Prepared By:</b> Resume Reviewer</p>`,
+    `<p>${esc(r.intro)}</p>`,
+    ...resumeReviewSections(r).map((s, i) => h(`${i + 1}) ${s.headline}`) + `<p>${esc(s.body)}</p>`),
+    h("FINAL DIAGNOSIS") + `<p>${esc(r.diagnosis)}</p>`,
+    h("BOTTOM LINE") + `<p>${esc(r.bottomLine)}</p>`,
+  ].join("");
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>Resume Review</title></head><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.4">${body}</body></html>`;
+  const blob = new Blob(["﻿", html], { type: "application/msword" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(r.clientName || "client").replace(/[^\w]+/g, "_")}_${(r.industry || "").toLowerCase().replace(/[^\w]+/g, "_")}_resume_review.doc`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 function verdict(score, max) {
   const pct = max ? score / max : 0;
   if (pct >= 0.55) return { text: "Looks likely fake or low-value — verify before spending time", color: RISK, glyph: "⚠" };
@@ -767,6 +879,70 @@ function App() {
     setAiError("");
   };
 
+  const [rvName, setRvName] = useState("");
+  const [rvTarget, setRvTarget] = useState("");
+  const [rvMode, setRvMode] = useState("file");
+  const [rvText, setRvText] = useState("");
+  const [rvPdf, setRvPdf] = useState(null);
+  const [rvFileName, setRvFileName] = useState("");
+  const [rvLoading, setRvLoading] = useState(false);
+  const [rvError, setRvError] = useState("");
+  const [rvResult, setRvResult] = useState(null);
+  const [rvCopied, setRvCopied] = useState(false);
+
+  const loadResumeFile = (file) => {
+    if (!file) return;
+    setRvError("");
+    setRvFileName(file.name);
+    setRvPdf(null);
+    setRvText("");
+    const reader = new FileReader();
+    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+      reader.onload = () => setRvPdf(reader.result.split(",")[1]);
+      reader.readAsDataURL(file);
+    } else if (/\.docx$/i.test(file.name)) {
+      reader.onload = () => {
+        window.mammoth.extractRawText({ arrayBuffer: reader.result })
+          .then((r) => setRvText(r.value))
+          .catch(() => setRvError("Couldn't read that Word file — try PDF or paste the text."));
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      setRvFileName("");
+      setRvError("Upload a PDF or .docx file, or paste the text instead.");
+    }
+  };
+
+  const runResumeReview = async () => {
+    const usePdf = rvMode === "file" && !!rvPdf;
+    if (!usePdf && !rvText.trim()) {
+      setRvError(rvMode === "file" ? "Upload the client's resume first." : "Paste the resume text first.");
+      return;
+    }
+    setRvError("");
+    setRvLoading(true);
+    setRvResult(null);
+    try {
+      setRvResult(await generateResumeReview({
+        clientName: rvName.trim(),
+        targetRoles: rvTarget.trim(),
+        resumeText: usePdf ? "" : rvText,
+        pdfBase64: usePdf ? rvPdf : null,
+      }));
+    } catch (e) {
+      setRvError("Couldn't review that — check connection and try again.");
+    } finally {
+      setRvLoading(false);
+    }
+  };
+
+  const copyResumeReview = () => {
+    if (!rvResult) return;
+    copyText(resumeReviewToText(rvResult));
+    setRvCopied(true);
+    setTimeout(() => setRvCopied(false), 1600);
+  };
+
   const selectStyle = { width: "100%", padding: "9px 10px", borderRadius: 4, border: "1px solid #D8D0BC", fontSize: 14, background: "#fff", color: INK };
   const labelStyle = { fontSize: 12, fontFamily: "'Courier New', monospace", color: "#5A5142", display: "block", marginBottom: 4, letterSpacing: 0.3 };
 
@@ -787,6 +963,7 @@ function App() {
             { id: "propose", label: "Build proposal" },
             { id: "screen", label: "Check if real" },
             { id: "posts", label: "Post generator" },
+            { id: "review", label: "Resume reviewer" },
             { id: "ranking", label: "Ranking template" },
           ].map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -1332,6 +1509,92 @@ function App() {
                     <button onClick={runPostGenerate} disabled={postLoading} style={{
                       marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>Regenerate</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "review" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                Upload a prospect's resume and get a client-ready diagnostic review, benchmarked against your house style.
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
+                <div>
+                  <label style={labelStyle}>CLIENT NAME (OPTIONAL — READ FROM RESUME IF BLANK)</label>
+                  <input value={rvName} onChange={(e) => setRvName(e.target.value)} placeholder="Sabine Oster" style={selectStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>TARGET ROLES / INDUSTRY (OPTIONAL)</label>
+                  <input value={rvTarget} onChange={(e) => setRvTarget(e.target.value)} placeholder="Manufacturing technician, aerospace assembly" style={selectStyle} />
+                </div>
+
+                <div style={{ display: "flex", gap: 10 }}>
+                  {[{ id: "file", label: "Upload PDF / Word" }, { id: "text", label: "Paste text" }].map((m) => (
+                    <button key={m.id} onClick={() => setRvMode(m.id)} style={{
+                      flex: 1, padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                      fontFamily: "'Courier New', monospace", fontSize: 12,
+                      background: rvMode === m.id ? INK : "transparent", color: rvMode === m.id ? PAPER : INK,
+                      border: `1px solid ${INK}`,
+                    }}>{m.label}</button>
+                  ))}
+                </div>
+
+                {rvMode === "file" ? (
+                  <div>
+                    <label style={labelStyle}>RESUME FILE (.PDF OR .DOCX)</label>
+                    <input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(e) => loadResumeFile(e.target.files[0])} style={{ fontFamily: "'Courier New', monospace", fontSize: 12 }} />
+                    {rvFileName && (rvPdf || rvText) && <div style={{ marginTop: 6, fontSize: 12, color: SAFE, fontFamily: "'Courier New', monospace" }}>Loaded: {rvFileName}</div>}
+                  </div>
+                ) : (
+                  <div>
+                    <label style={labelStyle}>RESUME TEXT</label>
+                    <textarea value={rvText} onChange={(e) => setRvText(e.target.value)} placeholder="Paste the full resume here..." style={{ ...selectStyle, minHeight: 180, fontFamily: "inherit", resize: "vertical" }} />
+                  </div>
+                )}
+              </div>
+
+              <button onClick={runResumeReview} disabled={rvLoading} style={{
+                padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6,
+                fontFamily: "'Courier New', monospace", fontSize: 13, cursor: rvLoading ? "default" : "pointer",
+                opacity: rvLoading ? 0.6 : 1, marginBottom: 16,
+              }}>{rvLoading ? "Reviewing..." : "Review resume"}</button>
+
+              {rvError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{rvError}</p>}
+
+              {rvResult && (
+                <div>
+                  <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "22px 20px", fontSize: 14, lineHeight: 1.65, color: INK }}>
+                    <div style={{ textAlign: "center", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>{rvResult.industry} RESUME REVIEW</div>
+                    <div style={{ marginTop: 14, fontSize: 13 }}><b>For:</b> {rvResult.clientName}</div>
+                    <div style={{ marginBottom: 12, fontSize: 13 }}><b>Prepared By:</b> Resume Reviewer</div>
+                    <p style={{ margin: "0 0 6px" }}>{rvResult.intro}</p>
+                    {resumeReviewSections(rvResult).map((s, i) => (
+                      <div key={i}>
+                        <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>{i + 1}) {s.headline}</div>
+                        <p style={{ margin: 0 }}>{s.body}</p>
+                      </div>
+                    ))}
+                    <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>FINAL DIAGNOSIS</div>
+                    <p style={{ margin: 0 }}>{rvResult.diagnosis}</p>
+                    <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>BOTTOM LINE</div>
+                    <p style={{ margin: 0 }}>{rvResult.bottomLine}</p>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                    <button onClick={copyResumeReview} style={{
+                      padding: "9px 16px", background: rvCopied ? SAFE : INK, color: PAPER, border: "none",
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>{rvCopied ? "Copied" : "Copy review"}</button>
+                    <button onClick={() => downloadResumeReviewDoc(rvResult)} style={{
+                      padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>Download Word doc</button>
+                    <button onClick={runResumeReview} disabled={rvLoading} style={{
+                      padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
                   </div>
                 </div>
