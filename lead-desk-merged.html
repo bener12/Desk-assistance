@@ -703,78 +703,9 @@ ${isMonday ? `\nThis is the anchor post that opens the week. Base it closely on 
 ${keywords ? `Naturally weave in these keywords: ${keywords}.` : ""}
 Write in a human, first-person voice with short paragraphs and line breaks suited to LinkedIn. No hashtag spam (max 3 at the end).
 
-Also design a square image card for the post. Pick the card type that fits the format: "checklist" for checklist posts, "beforeafter" for before-and-after posts, otherwise "hook". Keep card text very short.
-
 Respond ONLY with valid JSON, no markdown fences, in this exact shape:
-{"post": "the full post", "card": {"type": "hook | checklist | beforeafter", "headline": "max 10 words", "subline": "max 14 words, optional", "items": ["max 5 items, max 7 words each, checklist only"], "before": "max 20 words, beforeafter only", "after": "max 25 words, beforeafter only"}}`;
+{"post": "the full post"}`;
   return callClaudeJSON([{ type: "text", text }], { max_tokens: 1800 });
-}
-
-// Draws a 1080x1080 branded card on a canvas and returns a PNG data URL.
-function renderPostCard(card, { label = "" } = {}) {
-  const S = 1080, P = 90;
-  const c = document.createElement("canvas");
-  c.width = S; c.height = S;
-  const x = c.getContext("2d");
-  x.fillStyle = INK; x.fillRect(0, 0, S, S);
-  x.fillStyle = BRASS; x.fillRect(P, P, 120, 8);
-
-  const wrap = (text, font, maxW) => {
-    x.font = font;
-    const words = String(text || "").split(/\s+/).filter(Boolean), lines = [];
-    let line = "";
-    words.forEach((w) => {
-      const t = line ? line + " " + w : w;
-      if (x.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
-    });
-    if (line) lines.push(line);
-    return lines;
-  };
-  const draw = (lines, font, color, y, lh, left = P) => {
-    x.font = font; x.fillStyle = color; x.textBaseline = "top";
-    lines.forEach((l, i) => x.fillText(l, left, y + i * lh));
-    return y + lines.length * lh;
-  };
-  const W = S - P * 2;
-  const serif = (px, bold = true) => `${bold ? "700 " : ""}${px}px Georgia, 'Times New Roman', serif`;
-  const mono = (px) => `${px}px 'Courier New', monospace`;
-  let y = P + 50;
-
-  if (card.type === "checklist") {
-    y = draw(wrap(card.headline, serif(64), W), serif(64), PAPER, y, 76) + 40;
-    (card.items || []).slice(0, 5).forEach((item) => {
-      x.fillStyle = BRASS; x.fillRect(P, y + 8, 36, 36);
-      x.fillStyle = INK; x.font = "700 30px sans-serif"; x.textBaseline = "top"; x.fillText("✓", P + 7, y + 10);
-      y = draw(wrap(item, serif(40, false), W - 70), serif(40, false), PAPER, y, 50, P + 70) + 26;
-    });
-  } else if (card.type === "beforeafter") {
-    y = draw(wrap(card.headline, serif(56), W), serif(56), PAPER, y, 68) + 40;
-    const box = (tag, text, color, bg) => {
-      const lines = wrap(text, serif(34, false), W - 60);
-      const h = 80 + lines.length * 44;
-      x.fillStyle = bg; x.fillRect(P, y, W, h);
-      x.fillStyle = color; x.fillRect(P, y, 8, h);
-      draw([tag], mono(24), color, y + 24, 30, P + 30);
-      draw(lines, serif(34, false), INK, y + 62, 44, P + 30);
-      y += h + 28;
-    };
-    box("BEFORE", card.before, RISK, "#E8E2D3");
-    box("AFTER", card.after, SAFE, PAPER);
-  } else {
-    y = S / 2 - 160;
-    y = draw(wrap(card.headline, serif(84), W), serif(84), PAPER, y, 98) + 30;
-    if (card.subline) draw(wrap(card.subline, serif(38, false), W), serif(38, false), "#C9C2B2", y, 50);
-  }
-
-  x.fillStyle = BRASS; x.fillRect(P, S - P - 40, W, 2);
-  draw([label.toUpperCase()], mono(24), BRASS, S - P - 24, 30);
-  return c.toDataURL("image/png");
-}
-
-function downloadDataUrl(url, filename) {
-  const a = document.createElement("a");
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
 }
 
 function weeklyPlanToText(plan, posts) {
@@ -787,7 +718,7 @@ function weeklyPlanToText(plan, posts) {
   return out.join("\n");
 }
 
-function downloadWeeklyPlanPdf(plan, posts, images) {
+function downloadWeeklyPlanPdf(plan, posts) {
   const doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
   const margin = 60, width = doc.internal.pageSize.getWidth() - margin * 2, bottom = doc.internal.pageSize.getHeight() - margin;
   let y = margin;
@@ -819,12 +750,6 @@ function downloadWeeklyPlanPdf(plan, posts, images) {
     if (posts[i] && posts[i].post) {
       write("Post", { bold: true, gap: 2 });
       write(posts[i].post, { gap: 8 });
-    }
-    if (images[i]) {
-      const size = 220;
-      if (y + size > bottom) { doc.addPage(); y = margin; }
-      doc.addImage(images[i], "PNG", margin, y, size, size);
-      y += size + 10;
     }
     y += 12;
   });
@@ -889,11 +814,10 @@ function App() {
   const [wkLoading, setWkLoading] = useState(false);
   const [wkError, setWkError] = useState("");
   const [wkPosts, setWkPosts] = useState({});
-  const [wkImages, setWkImages] = useState({});
   const [wkBusy, setWkBusy] = useState({});
   const [wkCopied, setWkCopied] = useState(null);
 
-  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkImages({}); setWkBusy({}); setWkError(""); };
+  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkBusy({}); setWkError(""); };
 
   const runWeeklyStrategy = async () => {
     if (!postResult) return;
@@ -908,27 +832,17 @@ function App() {
     }
   };
 
-  // Writes the day's post (which also returns its card design). Returns the
-  // result so "Make image" can chain off it.
   const writeDayPost = async (i) => {
     setWkBusy((b) => ({ ...b, [i]: "post" }));
     setWkError("");
     try {
       const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: postResult.rewritten });
       setWkPosts((p) => ({ ...p, [i]: r }));
-      return r;
     } catch (e) {
       setWkError(`Couldn't write ${wkPlan.days[i].day}'s post — try again.`);
-      return null;
     } finally {
       setWkBusy((b) => ({ ...b, [i]: null }));
     }
-  };
-
-  const makeDayImage = async (i) => {
-    const r = wkPosts[i] || await writeDayPost(i);
-    if (!r || !r.card) return;
-    setWkImages((m) => ({ ...m, [i]: renderPostCard(r.card, { label: postNiche }) }));
   };
 
   const copyWk = (key, text) => {
@@ -1797,10 +1711,6 @@ function App() {
                             padding: "7px 12px", background: INK, color: PAPER, border: "none", borderRadius: 6,
                             fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
                           }}>{wkBusy[i] === "post" ? "Writing..." : (wkPosts[i] ? "Rewrite post" : "Write post")}</button>
-                          <button onClick={() => makeDayImage(i)} disabled={!!wkBusy[i]} style={{
-                            padding: "7px 12px", background: "transparent", color: INK, border: `1px solid ${INK}`, borderRadius: 6,
-                            fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
-                          }}>{wkImages[i] ? "Redraw image" : "Make image"}</button>
                         </div>
 
                         {wkPosts[i] && (
@@ -1813,15 +1723,6 @@ function App() {
                           </div>
                         )}
 
-                        {wkImages[i] && (
-                          <div style={{ marginTop: 12 }}>
-                            <img src={wkImages[i]} style={{ width: "100%", maxWidth: 360, borderRadius: 6, display: "block" }} />
-                            <button onClick={() => downloadDataUrl(wkImages[i], `${d.day.toLowerCase()}_post_card.png`)} style={{
-                              marginTop: 8, padding: "6px 12px", background: "transparent", color: INK, border: `1px solid ${INK}`,
-                              borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
-                            }}>Download PNG</button>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>
@@ -1851,7 +1752,7 @@ function App() {
                       padding: "9px 16px", background: wkCopied === "plan" ? SAFE : INK, color: PAPER, border: "none",
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>{wkCopied === "plan" ? "Copied" : "Copy week"}</button>
-                    <button onClick={() => downloadWeeklyPlanPdf(wkPlan, wkPosts, wkImages)} style={{
+                    <button onClick={() => downloadWeeklyPlanPdf(wkPlan, wkPosts)} style={{
                       padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Download PDF</button>
