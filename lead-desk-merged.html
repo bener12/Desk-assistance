@@ -648,6 +648,189 @@ function downloadResumeReviewPdf(r) {
   doc.save(`${(r.clientName || "client").replace(/[^\w]+/g, "_")}_${(r.industry || "").toLowerCase().replace(/[^\w]+/g, "_")}_resume_review.pdf`);
 }
 
+async function callClaudeJSON(content, { model = "claude-sonnet-4-6", max_tokens = 2000 } = {}) {
+  const res = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, max_tokens, messages: [{ role: "user", content }] }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Request failed (${res.status})`);
+  }
+  const data = await res.json();
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+  return JSON.parse(text.replace(/```json|```/g, "").trim());
+}
+
+// Monday-Friday funnel used for every weekly strategy: awareness -> teach ->
+// prove expertise -> build trust -> convert.
+const WEEK_FRAMEWORK = `Monday — Awareness (tag: Educate). Short text post. The ANCHOR POST opens the week: it names the problem and makes the audience realize it applies to them.
+Tuesday — Practical tips (tag: Teach). Checklist post with actionable steps readers can apply immediately.
+Wednesday — Demonstrate expertise (tag: Show your skill). Before-and-after example showing a weak version rewritten to highlight impact, proving the value of the service.
+Thursday — Address a common mistake (tag: Build trust). Educational text post correcting a myth or mistake on the theme, honestly and without overpromising.
+Friday — Conversion (tag: Invite inquiries). Short recap checklist plus an invitation for readers who need help to DM.`;
+
+async function generateWeeklyStrategy({ niche, keywords, anchorPost }) {
+  const text = `You are a LinkedIn content strategist for a solo service provider in the niche "${niche}". Build a Monday–Friday content strategy around the ANCHOR POST below so the whole week tells one connected story on its theme and leads naturally to inquiries on Friday.
+
+Follow this framework exactly:
+${WEEK_FRAMEWORK}
+
+${keywords ? `Target keywords to reinforce across the week (naturally, not stuffed): ${keywords}.` : ""}
+Each day must have a distinct, specific topic (written as a post headline), not a generic label. Keep formats varied so readers don't feel they're seeing the same post daily.
+
+ANCHOR POST:
+"""${anchorPost}"""
+
+Respond ONLY with valid JSON, no markdown fences, in this exact shape:
+{"theme": "the week's theme in a few words", "days": [{"day": "Monday", "purpose": "Awareness", "tag": "Educate", "topic": "headline-style topic", "angle": "1-2 sentences on how to approach it", "goal": "1 sentence goal", "format": "Short text post", "cta": "the call to action / closing question"}]}`;
+  return callClaudeJSON([{ type: "text", text }], { max_tokens: 2000 });
+}
+
+async function generateDayPost({ niche, keywords, theme, day, anchorPost }) {
+  const isMonday = day.day === "Monday";
+  const text = `You are a LinkedIn ghostwriter for a solo service provider in the niche "${niche}". Write ${day.day}'s post in a weekly series on the theme "${theme}".
+
+Day brief:
+- Purpose: ${day.purpose} (${day.tag})
+- Topic: ${day.topic}
+- Angle: ${day.angle}
+- Goal: ${day.goal}
+- Format: ${day.format}
+- End with this call to action (or a close variant): ${day.cta}
+${isMonday ? `\nThis is the anchor post that opens the week. Base it closely on the ANCHOR POST below, tightened to fit the brief:\n"""${anchorPost}"""` : ""}
+${keywords ? `Naturally weave in these keywords: ${keywords}.` : ""}
+Write in a human, first-person voice with short paragraphs and line breaks suited to LinkedIn. No hashtag spam (max 3 at the end).
+
+Also design a square image card for the post. Pick the card type that fits the format: "checklist" for checklist posts, "beforeafter" for before-and-after posts, otherwise "hook". Keep card text very short.
+
+Respond ONLY with valid JSON, no markdown fences, in this exact shape:
+{"post": "the full post", "card": {"type": "hook | checklist | beforeafter", "headline": "max 10 words", "subline": "max 14 words, optional", "items": ["max 5 items, max 7 words each, checklist only"], "before": "max 20 words, beforeafter only", "after": "max 25 words, beforeafter only"}}`;
+  return callClaudeJSON([{ type: "text", text }], { max_tokens: 1800 });
+}
+
+// Draws a 1080x1080 branded card on a canvas and returns a PNG data URL.
+function renderPostCard(card, { label = "" } = {}) {
+  const S = 1080, P = 90;
+  const c = document.createElement("canvas");
+  c.width = S; c.height = S;
+  const x = c.getContext("2d");
+  x.fillStyle = INK; x.fillRect(0, 0, S, S);
+  x.fillStyle = BRASS; x.fillRect(P, P, 120, 8);
+
+  const wrap = (text, font, maxW) => {
+    x.font = font;
+    const words = String(text || "").split(/\s+/).filter(Boolean), lines = [];
+    let line = "";
+    words.forEach((w) => {
+      const t = line ? line + " " + w : w;
+      if (x.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
+    });
+    if (line) lines.push(line);
+    return lines;
+  };
+  const draw = (lines, font, color, y, lh, left = P) => {
+    x.font = font; x.fillStyle = color; x.textBaseline = "top";
+    lines.forEach((l, i) => x.fillText(l, left, y + i * lh));
+    return y + lines.length * lh;
+  };
+  const W = S - P * 2;
+  const serif = (px, bold = true) => `${bold ? "700 " : ""}${px}px Georgia, 'Times New Roman', serif`;
+  const mono = (px) => `${px}px 'Courier New', monospace`;
+  let y = P + 50;
+
+  if (card.type === "checklist") {
+    y = draw(wrap(card.headline, serif(64), W), serif(64), PAPER, y, 76) + 40;
+    (card.items || []).slice(0, 5).forEach((item) => {
+      x.fillStyle = BRASS; x.fillRect(P, y + 8, 36, 36);
+      x.fillStyle = INK; x.font = "700 30px sans-serif"; x.textBaseline = "top"; x.fillText("✓", P + 7, y + 10);
+      y = draw(wrap(item, serif(40, false), W - 70), serif(40, false), PAPER, y, 50, P + 70) + 26;
+    });
+  } else if (card.type === "beforeafter") {
+    y = draw(wrap(card.headline, serif(56), W), serif(56), PAPER, y, 68) + 40;
+    const box = (tag, text, color, bg) => {
+      const lines = wrap(text, serif(34, false), W - 60);
+      const h = 80 + lines.length * 44;
+      x.fillStyle = bg; x.fillRect(P, y, W, h);
+      x.fillStyle = color; x.fillRect(P, y, 8, h);
+      draw([tag], mono(24), color, y + 24, 30, P + 30);
+      draw(lines, serif(34, false), INK, y + 62, 44, P + 30);
+      y += h + 28;
+    };
+    box("BEFORE", card.before, RISK, "#E8E2D3");
+    box("AFTER", card.after, SAFE, PAPER);
+  } else {
+    y = S / 2 - 160;
+    y = draw(wrap(card.headline, serif(84), W), serif(84), PAPER, y, 98) + 30;
+    if (card.subline) draw(wrap(card.subline, serif(38, false), W), serif(38, false), "#C9C2B2", y, 50);
+  }
+
+  x.fillStyle = BRASS; x.fillRect(P, S - P - 40, W, 2);
+  draw([label.toUpperCase()], mono(24), BRASS, S - P - 24, 30);
+  return c.toDataURL("image/png");
+}
+
+function downloadDataUrl(url, filename) {
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+function weeklyPlanToText(plan, posts) {
+  const out = [`WEEKLY LINKEDIN CONTENT STRATEGY — ${plan.theme}`, ""];
+  plan.days.forEach((d, i) => {
+    out.push(`${d.day.toUpperCase()} — ${d.purpose} (${d.tag})`, `Topic: ${d.topic}`, d.angle, `Goal: ${d.goal}`, `Format: ${d.format}`, `CTA: ${d.cta}`);
+    if (posts[i] && posts[i].post) out.push("", "POST:", posts[i].post);
+    out.push("");
+  });
+  return out.join("\n");
+}
+
+function downloadWeeklyPlanPdf(plan, posts, images) {
+  const doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+  const margin = 60, width = doc.internal.pageSize.getWidth() - margin * 2, bottom = doc.internal.pageSize.getHeight() - margin;
+  let y = margin;
+  const clean = (t) => String(t || "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...").replace(/[^\x00-\xFF]/g, "");
+  const write = (text, { bold = false, size = 11, gap = 6 } = {}) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    const lineH = size * 1.4;
+    clean(text).split("\n").forEach((para) => {
+      (para ? doc.splitTextToSize(para, width) : [""]).forEach((line) => {
+        if (y + lineH > bottom) { doc.addPage(); y = margin; }
+        doc.text(line, margin, y);
+        y += lineH;
+      });
+    });
+    y += gap;
+  };
+  write("WEEKLY LINKEDIN CONTENT STRATEGY", { bold: true, size: 16, gap: 2 });
+  write(plan.theme, { size: 12, gap: 16 });
+  write("At a glance", { bold: true, size: 12, gap: 2 });
+  plan.days.forEach((d) => write(`${d.day}: ${d.format} - "${d.cta}"`, { gap: 0 }));
+  y += 14;
+  plan.days.forEach((d, i) => {
+    write(`${d.day.toUpperCase()} - ${d.purpose} (${d.tag})`, { bold: true, size: 13, gap: 2 });
+    write(`Topic: ${d.topic}`, { bold: true, gap: 2 });
+    write(d.angle, { gap: 2 });
+    write(`Goal: ${d.goal}`, { gap: 2 });
+    write(`Format: ${d.format}   |   CTA: ${d.cta}`, { gap: 8 });
+    if (posts[i] && posts[i].post) {
+      write("Post", { bold: true, gap: 2 });
+      write(posts[i].post, { gap: 8 });
+    }
+    if (images[i]) {
+      const size = 220;
+      if (y + size > bottom) { doc.addPage(); y = margin; }
+      doc.addImage(images[i], "PNG", margin, y, size, size);
+      y += size + 10;
+    }
+    y += 12;
+  });
+  doc.save(`weekly_content_strategy_${plan.theme.toLowerCase().replace(/[^\w]+/g, "_").slice(0, 40)}.pdf`);
+}
+
 function verdict(score, max) {
   const pct = max ? score / max : 0;
   if (pct >= 0.55) return { text: "Looks likely fake or low-value — verify before spending time", color: RISK, glyph: "⚠" };
@@ -702,6 +885,58 @@ function App() {
   const [postResult, setPostResult] = useState(null);
   const [postCopied, setPostCopied] = useState(false);
 
+  const [wkPlan, setWkPlan] = useState(null);
+  const [wkLoading, setWkLoading] = useState(false);
+  const [wkError, setWkError] = useState("");
+  const [wkPosts, setWkPosts] = useState({});
+  const [wkImages, setWkImages] = useState({});
+  const [wkBusy, setWkBusy] = useState({});
+  const [wkCopied, setWkCopied] = useState(null);
+
+  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkImages({}); setWkBusy({}); setWkError(""); };
+
+  const runWeeklyStrategy = async () => {
+    if (!postResult) return;
+    resetWeek();
+    setWkLoading(true);
+    try {
+      setWkPlan(await generateWeeklyStrategy({ niche: postNiche, keywords: postKeywords, anchorPost: postResult.rewritten }));
+    } catch (e) {
+      setWkError("Couldn't build the week — check connection and try again.");
+    } finally {
+      setWkLoading(false);
+    }
+  };
+
+  // Writes the day's post (which also returns its card design). Returns the
+  // result so "Make image" can chain off it.
+  const writeDayPost = async (i) => {
+    setWkBusy((b) => ({ ...b, [i]: "post" }));
+    setWkError("");
+    try {
+      const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: postResult.rewritten });
+      setWkPosts((p) => ({ ...p, [i]: r }));
+      return r;
+    } catch (e) {
+      setWkError(`Couldn't write ${wkPlan.days[i].day}'s post — try again.`);
+      return null;
+    } finally {
+      setWkBusy((b) => ({ ...b, [i]: null }));
+    }
+  };
+
+  const makeDayImage = async (i) => {
+    const r = wkPosts[i] || await writeDayPost(i);
+    if (!r || !r.card) return;
+    setWkImages((m) => ({ ...m, [i]: renderPostCard(r.card, { label: postNiche }) }));
+  };
+
+  const copyWk = (key, text) => {
+    copyText(text);
+    setWkCopied(key);
+    setTimeout(() => setWkCopied(null), 1600);
+  };
+
   const loadPostImage = (file) => {
     if (!file) return;
     setPostImageMediaType(file.type);
@@ -721,6 +956,7 @@ function App() {
     }
     setPostError("");
     setPostLoading(true);
+    resetWeek();
     setPostResult(null);
     try {
       const result = await generatePostFromClaude({
@@ -1520,6 +1756,105 @@ function App() {
                       marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
+                  </div>
+
+                  <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px dashed #D8D0BC" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Turn this post into a week of content</div>
+                    <div style={{ fontSize: 12, color: "#5A5142", fontFamily: "'Courier New', monospace", marginBottom: 12 }}>
+                      Mon awareness &rarr; Tue teach &rarr; Wed prove expertise &rarr; Thu build trust &rarr; Fri convert.
+                    </div>
+                    <button onClick={runWeeklyStrategy} disabled={wkLoading} style={{
+                      padding: "9px 16px", background: BRASS, color: PAPER, border: "none", borderRadius: 6,
+                      fontFamily: "'Courier New', monospace", fontSize: 13, cursor: wkLoading ? "default" : "pointer", opacity: wkLoading ? 0.6 : 1,
+                    }}>{wkLoading ? "Planning the week..." : (wkPlan ? "Rebuild the week" : "Build a week around this post")}</button>
+                  </div>
+                </div>
+              )}
+
+              {wkError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{wkError}</p>}
+
+              {wkPlan && (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ padding: "14px 16px", borderRadius: 6, background: INK, marginBottom: 14 }}>
+                    <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11, letterSpacing: 0.5, marginBottom: 4 }}>YOUR WEEKLY LINKEDIN CONTENT STRATEGY</div>
+                    <div style={{ color: PAPER, fontSize: 15, fontWeight: 700 }}>{wkPlan.theme}</div>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {wkPlan.days.map((d, i) => (
+                      <div key={i} style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "14px 16px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                          <div style={{ fontSize: 14, fontWeight: 700 }}>{d.day} &mdash; {d.purpose}</div>
+                          <span style={{ fontSize: 11, fontFamily: "'Courier New', monospace", color: BRASS, border: `1px solid ${BRASS}`, borderRadius: 10, padding: "1px 8px" }}>{d.tag}</span>
+                        </div>
+                        <div style={{ fontSize: 14, marginTop: 8 }}><b>Topic:</b> {d.topic}</div>
+                        <div style={{ fontSize: 13, color: "#5A5142", lineHeight: 1.6, marginTop: 4 }}>{d.angle}</div>
+                        <div style={{ fontSize: 13, color: "#5A5142", marginTop: 4 }}><b>Goal:</b> {d.goal}</div>
+                        <div style={{ fontSize: 12, fontFamily: "'Courier New', monospace", color: "#8A8272", marginTop: 6 }}>{d.format} &middot; CTA: &ldquo;{d.cta}&rdquo;</div>
+
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                          <button onClick={() => writeDayPost(i)} disabled={!!wkBusy[i]} style={{
+                            padding: "7px 12px", background: INK, color: PAPER, border: "none", borderRadius: 6,
+                            fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
+                          }}>{wkBusy[i] === "post" ? "Writing..." : (wkPosts[i] ? "Rewrite post" : "Write post")}</button>
+                          <button onClick={() => makeDayImage(i)} disabled={!!wkBusy[i]} style={{
+                            padding: "7px 12px", background: "transparent", color: INK, border: `1px solid ${INK}`, borderRadius: 6,
+                            fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
+                          }}>{wkImages[i] ? "Redraw image" : "Make image"}</button>
+                        </div>
+
+                        {wkPosts[i] && (
+                          <div style={{ marginTop: 12 }}>
+                            <div style={{ background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 6, padding: "12px 14px", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.6 }}>{wkPosts[i].post}</div>
+                            <button onClick={() => copyWk(`post${i}`, wkPosts[i].post)} style={{
+                              marginTop: 8, padding: "6px 12px", background: wkCopied === `post${i}` ? SAFE : "transparent", color: wkCopied === `post${i}` ? PAPER : INK,
+                              border: `1px solid ${wkCopied === `post${i}` ? SAFE : INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
+                            }}>{wkCopied === `post${i}` ? "Copied" : "Copy post"}</button>
+                          </div>
+                        )}
+
+                        {wkImages[i] && (
+                          <div style={{ marginTop: 12 }}>
+                            <img src={wkImages[i]} style={{ width: "100%", maxWidth: 360, borderRadius: 6, display: "block" }} />
+                            <button onClick={() => downloadDataUrl(wkImages[i], `${d.day.toLowerCase()}_post_card.png`)} style={{
+                              marginTop: 8, padding: "6px 12px", background: "transparent", color: INK, border: `1px solid ${INK}`,
+                              borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
+                            }}>Download PNG</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "14px 16px", marginTop: 14, overflowX: "auto" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>How to execute the strategy</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272" }}>
+                          <th style={{ padding: "6px 8px 6px 0" }}>DAY</th><th style={{ padding: "6px 8px" }}>FORMAT</th><th style={{ padding: "6px 0 6px 8px" }}>CALL TO ACTION</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wkPlan.days.map((d, i) => (
+                          <tr key={i} style={{ borderTop: "1px solid #EEE8DA" }}>
+                            <td style={{ padding: "7px 8px 7px 0", fontWeight: 700 }}>{d.day}</td>
+                            <td style={{ padding: "7px 8px" }}>{d.format}</td>
+                            <td style={{ padding: "7px 0 7px 8px" }}>&ldquo;{d.cta}&rdquo;</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                    <button onClick={() => copyWk("plan", weeklyPlanToText(wkPlan, wkPosts))} style={{
+                      padding: "9px 16px", background: wkCopied === "plan" ? SAFE : INK, color: PAPER, border: "none",
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>{wkCopied === "plan" ? "Copied" : "Copy week"}</button>
+                    <button onClick={() => downloadWeeklyPlanPdf(wkPlan, wkPosts, wkImages)} style={{
+                      padding: "9px 16px", background: "transparent", color: INK, border: `1px solid ${INK}`,
+                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
+                    }}>Download PDF</button>
                   </div>
                 </div>
               )}
