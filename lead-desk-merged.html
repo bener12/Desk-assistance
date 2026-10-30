@@ -19,7 +19,31 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo } = React;
+const { useState, useMemo, useEffect } = React;
+
+// useState that survives closing the app by mirroring the value into this
+// browser's localStorage. Storage can be blocked (private mode, quota), so
+// every access is guarded and the app still works without it.
+function usePersisted(key, initial) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem("leaddesk:" + key);
+      return raw === null ? initial : JSON.parse(raw);
+    } catch (e) {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("leaddesk:" + key, JSON.stringify(value)); } catch (e) {}
+  }, [key, value]);
+  return [value, setValue];
+}
+
+const HISTORY_LIMIT = 50;
+
+function formatSavedAt(ts) {
+  return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 // Cross-browser copy: use the async Clipboard API when available (needs a
 // secure context), otherwise fall back to a hidden textarea + execCommand so
@@ -795,36 +819,42 @@ function App() {
   const [aiError, setAiError] = useState("");
   const [aiCopiedIdx, setAiCopiedIdx] = useState(null);
 
-  const [postTask, setPostTask] = useState("rewrite");
-  const [postNiche, setPostNiche] = useState("Resume writing / career coaching");
-  const [postKeywords, setPostKeywords] = useState("");
-  const [postFormatPref, setPostFormatPref] = useState("");
+  const [postTask, setPostTask] = usePersisted("postTask", "rewrite");
+  const [postNiche, setPostNiche] = usePersisted("postNiche", "Resume writing / career coaching");
+  const [postKeywords, setPostKeywords] = usePersisted("postKeywords", "");
+  const [postFormatPref, setPostFormatPref] = usePersisted("postFormatPref", "");
   const [postSourceMode, setPostSourceMode] = useState("text");
-  const [postSourceText, setPostSourceText] = useState("");
-  const [postContext, setPostContext] = useState("");
+  const [postSourceText, setPostSourceText] = usePersisted("postSourceText", "");
+  const [postContext, setPostContext] = usePersisted("postContext", "");
   const [postImageBase64, setPostImageBase64] = useState(null);
   const [postImageMediaType, setPostImageMediaType] = useState(null);
   const [postImagePreview, setPostImagePreview] = useState(null);
   const [postLoading, setPostLoading] = useState(false);
   const [postError, setPostError] = useState("");
-  const [postResult, setPostResult] = useState(null);
+  const [postResult, setPostResult] = usePersisted("postResult", null);
   const [postCopied, setPostCopied] = useState(false);
 
-  const [wkPlan, setWkPlan] = useState(null);
+  const [wkPlan, setWkPlan] = usePersisted("wkPlan", null);
   const [wkLoading, setWkLoading] = useState(false);
   const [wkError, setWkError] = useState("");
-  const [wkPosts, setWkPosts] = useState({});
+  const [wkPosts, setWkPosts] = usePersisted("wkPosts", {});
   const [wkBusy, setWkBusy] = useState({});
+  const [wkId, setWkId] = usePersisted("wkId", null);
+  const [savedWeeks, setSavedWeeks] = usePersisted("savedWeeks", []);
   const [wkCopied, setWkCopied] = useState(null);
 
-  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkBusy({}); setWkError(""); };
+  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkId(null); setWkBusy({}); setWkError(""); };
 
   const runWeeklyStrategy = async () => {
     if (!postResult) return;
     resetWeek();
     setWkLoading(true);
     try {
-      setWkPlan(await generateWeeklyStrategy({ niche: postNiche, keywords: postKeywords, anchorPost: postResult.rewritten }));
+      const plan = await generateWeeklyStrategy({ niche: postNiche, keywords: postKeywords, anchorPost: postResult.rewritten });
+      const id = Date.now();
+      setWkPlan(plan);
+      setWkId(id);
+      setSavedWeeks((list) => [{ id, savedAt: id, niche: postNiche, keywords: postKeywords, anchor: postResult, plan, posts: {} }, ...list].slice(0, HISTORY_LIMIT));
     } catch (e) {
       setWkError("Couldn't build the week — check connection and try again.");
     } finally {
@@ -838,11 +868,28 @@ function App() {
     try {
       const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: postResult.rewritten });
       setWkPosts((p) => ({ ...p, [i]: r }));
+      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
     } catch (e) {
       setWkError(`Couldn't write ${wkPlan.days[i].day}'s post — try again.`);
     } finally {
       setWkBusy((b) => ({ ...b, [i]: null }));
     }
+  };
+
+  const openSavedWeek = (w) => {
+    setPostNiche(w.niche);
+    setPostKeywords(w.keywords || "");
+    setPostResult(w.anchor);
+    setWkPlan(w.plan);
+    setWkPosts(w.posts || {});
+    setWkId(w.id);
+    setWkBusy({});
+    setWkError("");
+  };
+
+  const deleteSavedWeek = (id) => {
+    setSavedWeeks((list) => list.filter((w) => w.id !== id));
+    if (id === wkId) resetWeek();
   };
 
   const copyWk = (key, text) => {
@@ -1039,16 +1086,17 @@ function App() {
     setAiError("");
   };
 
-  const [rvName, setRvName] = useState("");
-  const [rvTarget, setRvTarget] = useState("");
+  const [rvName, setRvName] = usePersisted("rvName", "");
+  const [rvTarget, setRvTarget] = usePersisted("rvTarget", "");
   const [rvMode, setRvMode] = useState("file");
   const [rvText, setRvText] = useState("");
   const [rvPdf, setRvPdf] = useState(null);
   const [rvFileName, setRvFileName] = useState("");
   const [rvLoading, setRvLoading] = useState(false);
   const [rvError, setRvError] = useState("");
-  const [rvResult, setRvResult] = useState(null);
+  const [rvResult, setRvResult] = usePersisted("rvResult", null);
   const [rvCopied, setRvCopied] = useState(false);
+  const [savedReviews, setSavedReviews] = usePersisted("savedReviews", []);
 
   const loadResumeFile = (file) => {
     if (!file) return;
@@ -1083,12 +1131,14 @@ function App() {
     setRvLoading(true);
     setRvResult(null);
     try {
-      setRvResult(await generateResumeReview({
+      const review = await generateResumeReview({
         clientName: rvName.trim(),
         targetRoles: rvTarget.trim(),
         resumeText: usePdf ? "" : rvText,
         pdfBase64: usePdf ? rvPdf : null,
-      }));
+      });
+      setRvResult(review);
+      setSavedReviews((list) => [{ id: Date.now(), review }, ...list].slice(0, HISTORY_LIMIT));
     } catch (e) {
       setRvError("Couldn't review that — check connection and try again.");
     } finally {
@@ -1534,6 +1584,23 @@ function App() {
                 Rewrite a proven post into your niche, or build a new one from a client win or photo.
               </p>
 
+              {savedWeeks.length > 0 && (
+                <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px", marginBottom: 18 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Saved weeks ({savedWeeks.length})</summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                    {savedWeeks.map((h) => (
+                      <div key={h.id} style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
+                        <button onClick={() => openSavedWeek(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: h.id === wkId ? 700 : 400 }}>
+                          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(h.savedAt)}</span>{h.plan.theme}
+                        </button>
+                        <button onClick={() => deleteSavedWeek(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+
               <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
                 <button onClick={() => { setPostTask("rewrite"); setPostResult(null); setPostError(""); }} style={{
                   flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
@@ -1767,6 +1834,23 @@ function App() {
               <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
                 Upload a prospect's resume and get a client-ready diagnostic review, benchmarked against your house style.
               </p>
+
+              {savedReviews.length > 0 && (
+                <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px", marginBottom: 18 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Past reviews ({savedReviews.length})</summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                    {savedReviews.map((h) => (
+                      <div key={h.id} style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
+                        <button onClick={() => ((x) => setRvResult(x.review))(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: h.review === rvResult ? 700 : 400 }}>
+                          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(h.id)}</span>{h.review.clientName} &middot; {h.review.industry}
+                        </button>
+                        <button onClick={() => ((id) => setSavedReviews((list) => list.filter((r) => r.id !== id)))(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
 
               <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
                 <div>
