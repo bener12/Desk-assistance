@@ -502,11 +502,27 @@ const RANKING_STEPS = [
   { n: 7, title: "Re-check and iterate monthly", body: "Search your own target phrases from your account periodically. Results are personalized per searcher \u2014 use this to sanity-check your own position, not to benchmark against someone else's search." },
 ];
 
-async function generatePostFromClaude({ task, niche, keywords, formatPref, sourceText, contextNote, imageBase64, imageMediaType }) {
+async function generatePostFromClaude({ task, niche, keywords, formatPref, captionType, sourceText, contextNote, imageBase64, imageMediaType }) {
   const keywordLine = keywords ? `Also naturally weave in these target keywords so they read as exact or near-exact phrases (for search/discovery relevance, not stuffed): ${keywords}. Note briefly how you reinforced them.` : "";
 
   let instructions;
-  if (task === "rewrite") {
+  if (task === "caption") {
+    instructions = `You are a LinkedIn ghostwriter for a service provider in the niche "${niche}". Write the caption that goes in the share box above this ${captionType || "image post"} (the graphic/content is given below as an image and/or notes). The caption's job is to stop the scroll and get people to open, read, or engage with it — it should NOT repeat everything already on the graphic.
+
+Caption rules:
+- First line is a scroll-stopping hook (it's all people see before "...see more").
+- 3-8 short lines with line breaks; first person, warm, conversational, specific to what's in the content.
+- Tease the value inside (e.g. "5 questions that tell you if your resume is costing you interviews") without giving it all away.
+- End with a clear call to action fitting a ${captionType || "image post"} (e.g. read the full edition, answer in the comments, subscribe, DM).
+- 3 relevant hashtags max at the end.
+${keywordLine}
+${contextNote ? `Extra context from the user: ${contextNote}` : ""}
+
+Write 3 genuinely different options (e.g. question hook, bold statement hook, personal story hook).
+
+Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact shape:
+{"format": "what the content is, e.g. Newsletter: Quick Resume Gut-Check", "why": "1 sentence on the angle you took", "keywordNote": "1 sentence on keywords, or empty string if none given", "rewritten": "caption option 1 (strongest)", "alternatives": ["caption option 2", "caption option 3"]}`;
+  } else if (task === "rewrite") {
     instructions = `You are a LinkedIn content strategist. Analyze the ORIGINAL POST (given as text or an image below), identify its viral format/hook pattern (e.g. before/after story, contrarian hot take, curated list, quantified result), briefly explain why that pattern works, then rewrite the post so it fits the niche of "${niche}" while keeping the same structural pattern and emotional hook.
 
 ${keywordLine}
@@ -529,27 +545,11 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
     content.push({ type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } });
     content.push({ type: "text", text: instructions + (sourceText ? `\n\nUser's notes about the photo/topic:\n"""${sourceText}"""` : "") });
   } else {
-    const label = task === "rewrite" ? "ORIGINAL POST" : "TOPIC / STORY / REVIEW";
+    const label = task === "rewrite" ? "ORIGINAL POST" : task === "caption" ? "WHAT THE CONTENT IS ABOUT" : "TOPIC / STORY / REVIEW";
     content.push({ type: "text", text: instructions + `\n\n${label}:\n"""${sourceText}"""` });
   }
 
-  const res = await fetch("/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
-      messages: [{ role: "user", content }],
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Request failed (${res.status})`);
-  }
-  const data = await res.json();
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-  const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  return callClaudeJSON(content, { model: "claude-haiku-4-5-20251001", max_tokens: task === "caption" ? 1500 : 1000 });
 }
 
 // Benchmark of what a strong resume looks like (house style). The reviewer
@@ -833,6 +833,8 @@ function App() {
   const [postNiche, setPostNiche] = usePersisted("postNiche", "Resume writing / career coaching");
   const [postKeywords, setPostKeywords] = usePersisted("postKeywords", "");
   const [postFormatPref, setPostFormatPref] = usePersisted("postFormatPref", "");
+  const [postCaptionType, setPostCaptionType] = usePersisted("postCaptionType", "newsletter edition");
+  const [postCopiedAlt, setPostCopiedAlt] = useState(null);
   const [postSourceMode, setPostSourceMode] = useState("text");
   const [postSourceText, setPostSourceText] = usePersisted("postSourceText", "");
   const [postContext, setPostContext] = usePersisted("postContext", "");
@@ -922,7 +924,7 @@ function App() {
   const runPostGenerate = async () => {
     const hasInput = postSourceMode === "text" ? !!postSourceText.trim() : !!postImageBase64;
     if (!hasInput) {
-      setPostError(postTask === "rewrite" ? "Paste the original post text or a screenshot first." : "Describe the topic or add a photo first.");
+      setPostError(postTask === "rewrite" ? "Paste the original post text or a screenshot first." : postTask === "caption" ? "Upload the image/graphic or describe what the post is about first." : "Describe the topic or add a photo first.");
       return;
     }
     setPostError("");
@@ -935,6 +937,7 @@ function App() {
         niche: postNiche,
         keywords: postKeywords,
         formatPref: postTask === "create" ? postFormatPref : "",
+        captionType: postCaptionType,
         sourceText: postSourceText,
         contextNote: postContext,
         imageBase64: postSourceMode === "image" ? postImageBase64 : null,
@@ -1611,7 +1614,7 @@ function App() {
               )}
 
 
-              <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+              <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
                 <button onClick={() => { setPostTask("rewrite"); setPostResult(null); setPostError(""); }} style={{
                   flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
                   fontFamily: "'Courier New', monospace", fontSize: 12,
@@ -1624,6 +1627,12 @@ function App() {
                   background: postTask === "create" ? INK : "transparent", color: postTask === "create" ? PAPER : INK,
                   border: `1px solid ${INK}`,
                 }}>Create from topic / photo</button>
+                <button onClick={() => { setPostTask("caption"); setPostSourceMode("image"); setPostResult(null); setPostError(""); }} style={{
+                  flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
+                  fontFamily: "'Courier New', monospace", fontSize: 12,
+                  background: postTask === "caption" ? INK : "transparent", color: postTask === "caption" ? PAPER : INK,
+                  border: `1px solid ${INK}`,
+                }}>Write caption</button>
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
@@ -1635,6 +1644,19 @@ function App() {
                   <label style={labelStyle}>TARGET KEYWORDS TO REINFORCE (COMMA SEPARATED)</label>
                   <input value={postKeywords} onChange={(e) => setPostKeywords(e.target.value)} placeholder="resume writer, professional resume writing services" style={selectStyle} />
                 </div>
+
+                {postTask === "caption" && (
+                  <div>
+                    <label style={labelStyle}>WHAT IS THE CAPTION FOR?</label>
+                    <select value={postCaptionType} onChange={(e) => setPostCaptionType(e.target.value)} style={selectStyle}>
+                      <option value="newsletter edition">Newsletter edition</option>
+                      <option value="article">Article</option>
+                      <option value="image or graphic post">Image / graphic post</option>
+                      <option value="carousel / document post">Carousel / document post</option>
+                      <option value="video post">Video post</option>
+                    </select>
+                  </div>
+                )}
 
                 {postTask === "create" && (
                   <div>
@@ -1666,11 +1688,11 @@ function App() {
 
                 {postSourceMode === "text" && (
                   <div>
-                    <label style={labelStyle}>{postTask === "rewrite" ? "ORIGINAL POST TEXT" : "TOPIC, STORY, OR CLIENT REVIEW"}</label>
+                    <label style={labelStyle}>{postTask === "rewrite" ? "ORIGINAL POST TEXT" : postTask === "caption" ? "WHAT IS THE POST / EDITION ABOUT?" : "TOPIC, STORY, OR CLIENT REVIEW"}</label>
                     <textarea
                       value={postSourceText}
                       onChange={(e) => setPostSourceText(e.target.value)}
-                      placeholder={postTask === "rewrite" ? "Paste the full text of the viral post here..." : "Describe the topic or paste the client review/story..."}
+                      placeholder={postTask === "rewrite" ? "Paste the full text of the viral post here..." : postTask === "caption" ? "e.g. Newsletter edition: Quick Resume Gut-Check \u2014 5 yes/no questions to test your resume..." : "Describe the topic or paste the client review/story..."}
                       style={{ ...selectStyle, minHeight: 100, fontFamily: "inherit", resize: "vertical" }}
                     />
                   </div>
@@ -1693,7 +1715,7 @@ function App() {
                       {postImagePreview ? "Image loaded \u2014 click and paste again to replace" : "Click here, then paste (Ctrl/Cmd+V) a copied image"}
                     </div>
                     {postImagePreview && <img src={postImagePreview} style={{ maxWidth: "100%", marginTop: 8, borderRadius: 6, border: "1px solid #D8D0BC" }} />}
-                    {postTask === "create" && (
+                    {postTask !== "rewrite" && (
                       <textarea
                         value={postSourceText}
                         onChange={(e) => setPostSourceText(e.target.value)}
@@ -1705,7 +1727,7 @@ function App() {
                 )}
 
                 <div>
-                  <label style={labelStyle}>{postTask === "rewrite" ? "POST LINK (OPTIONAL)" : "EXTRA CONTEXT (OPTIONAL)"}</label>
+                  <label style={labelStyle}>{postTask === "rewrite" ? "POST LINK (OPTIONAL)" : postTask === "caption" ? "LINK OR EXTRA CONTEXT (OPTIONAL)" : "EXTRA CONTEXT (OPTIONAL)"}</label>
                   <input value={postContext} onChange={(e) => setPostContext(e.target.value)} placeholder={postTask === "rewrite" ? "https://linkedin.com/..." : "Anything else worth mentioning"} style={selectStyle} />
                 </div>
               </div>
@@ -1719,7 +1741,7 @@ function App() {
                   opacity: postLoading ? 0.6 : 1, marginBottom: 16,
                 }}
               >
-                {postLoading ? "Working..." : (postTask === "rewrite" ? "Analyze and rewrite" : "Generate post")}
+                {postLoading ? "Working..." : (postTask === "rewrite" ? "Analyze and rewrite" : postTask === "caption" ? "Write captions" : "Generate post")}
               </button>
 
               {postError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{postError}</p>}
@@ -1727,7 +1749,7 @@ function App() {
               {postResult && (
                 <div>
                   <div style={{ marginBottom: 14, padding: "14px 16px", borderRadius: 6, background: INK }}>
-                    <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11, marginBottom: 6, letterSpacing: 0.5 }}>DETECTED FORMAT</div>
+                    <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11, marginBottom: 6, letterSpacing: 0.5 }}>{postTask === "caption" ? "CAPTION FOR" : "DETECTED FORMAT"}</div>
                     <div style={{ color: PAPER, fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{postResult.format}</div>
                     <div style={{ color: "#9AA3B0", fontSize: 12, lineHeight: 1.6 }}>{postResult.why}</div>
                     {postResult.keywordNote && <div style={{ color: "#9AA3B0", fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>{postResult.keywordNote}</div>}
@@ -1735,20 +1757,34 @@ function App() {
                   <div style={{ position: "relative" }}>
                     <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
                       <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>
-                        {postTask === "rewrite" ? "REWRITTEN POST" : "NEW POST"}
+                        {postTask === "rewrite" ? "REWRITTEN POST" : postTask === "caption" ? "CAPTION \u2014 OPTION 1" : "NEW POST"}
                       </div>
                       {postResult.rewritten}
                     </div>
                     <button onClick={copyPostResult} style={{
                       marginTop: 12, padding: "9px 16px", background: postCopied ? SAFE : INK, color: PAPER, border: "none",
                       borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
-                    }}>{postCopied ? "Copied" : "Copy post"}</button>
+                    }}>{postCopied ? "Copied" : (postTask === "caption" ? "Copy caption" : "Copy post")}</button>
                     <button onClick={runPostGenerate} disabled={postLoading} style={{
                       marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
                   </div>
 
+                  {(postResult.alternatives || []).map((alt, k) => (
+                    <div key={k} style={{ marginTop: 14 }}>
+                      <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
+                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>CAPTION &mdash; OPTION {k + 2}</div>
+                        {alt}
+                      </div>
+                      <button onClick={() => { copyText(alt); setPostCopiedAlt(k); setTimeout(() => setPostCopiedAlt(null), 1600); }} style={{
+                        marginTop: 8, padding: "7px 14px", background: postCopiedAlt === k ? SAFE : INK, color: PAPER, border: "none",
+                        borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
+                      }}>{postCopiedAlt === k ? "Copied" : "Copy caption"}</button>
+                    </div>
+                  ))}
+
+                  {postTask !== "caption" && (
                   <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px dashed #D8D0BC" }}>
                     <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Turn this post into a week of content</div>
                     <div style={{ fontSize: 12, color: "#5A5142", fontFamily: "'Courier New', monospace", marginBottom: 12 }}>
@@ -1759,6 +1795,7 @@ function App() {
                       fontFamily: "'Courier New', monospace", fontSize: 13, cursor: wkLoading ? "default" : "pointer", opacity: wkLoading ? 0.6 : 1,
                     }}>{wkLoading ? "Planning the week..." : (wkPlan ? "Rebuild the week" : "Build a week around this post")}</button>
                   </div>
+                  )}
                 </div>
               )}
 
