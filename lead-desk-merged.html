@@ -41,6 +41,22 @@ function usePersisted(key, initial) {
 
 const HISTORY_LIMIT = 50;
 
+// ---- Persistent memory -------------------------------------------------
+// Standing notes (apply to every reply) and per-client profiles (notes +
+// saved conversation thread). Lives in localStorage under "leaddesk:memory"
+// and can be exported/imported as JSON to move between devices.
+const EMPTY_MEMORY = { notes: [], clients: {} };
+const clientKey = (name) => (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+function memoryPrompt(memory, clientName) {
+  const parts = [];
+  const notes = ((memory && memory.notes) || []).map((n) => n.text).filter(Boolean);
+  if (notes.length) parts.push(`STANDING NOTES FROM ERIKA (always respect these; they override defaults):\n${notes.map((t) => `- ${t}`).join("\n")}`);
+  const c = memory && memory.clients && memory.clients[clientKey(clientName)];
+  if (c && c.notes && c.notes.trim()) parts.push(`WHAT WE KNOW ABOUT THIS CLIENT (${c.name}):\n${c.notes.trim()}`);
+  return parts.join("\n\n");
+}
+
 function formatSavedAt(ts) {
   return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
@@ -809,7 +825,7 @@ function App() {
   const [copied, setCopied] = useState(false);
   const [variantSeed, setVariantSeed] = useState(0);
   const [respSituation, setRespSituation] = useState("askForResume");
-  const [respClientName, setRespClientName] = useState("");
+  const [respClientName, setRespClientName] = usePersisted("respClientName", "");
   const [respP1, setRespP1] = useState("120");
   const [respP2, setRespP2] = useState("180");
   const [respP3, setRespP3] = useState("220");
@@ -818,7 +834,10 @@ function App() {
   const [respCopied, setRespCopied] = useState(false);
   const [pastedClientMsg, setPastedClientMsg] = useState("");
   const [aiMode, setAiMode] = useState(false);
-  const [convo, setConvo] = useState([]); // running thread: {role:"client"|"me", text}
+  const [convo, setConvo] = usePersisted("convo", []); // running thread: {role:"client"|"me", text}
+  const [memory, setMemory] = usePersisted("memory", EMPTY_MEMORY);
+  const [newNote, setNewNote] = useState("");
+  const [memMsg, setMemMsg] = useState("");
   const [respTone, setRespTone] = useState("default");
   const [respModel, setRespModel] = useState("claude-sonnet-4-6");
   const [respMulti, setRespMulti] = useState(true); // true = 3 options, false = 1
@@ -1033,7 +1052,8 @@ function App() {
     setAiLoading(true);
     setAiError("");
     try {
-      const extraContext = `Pricing tiers if pricing comes up: Resume only $${respP1}, Resume + LinkedIn $${respP2}, Complete package $${respP3}.`;
+      const mem = memoryPrompt(memory, respClientName);
+      const extraContext = `Pricing tiers if pricing comes up: Resume only $${respP1}, Resume + LinkedIn $${respP2}, Complete package $${respP3}.${mem ? `\n\n${mem}` : ""}`;
       const result = await generateAIResponse({
         clientMessage,
         thread,
@@ -1085,6 +1105,51 @@ function App() {
     setAiReasoning("");
     setAiCopiedIdx(idx);
     setTimeout(() => setAiCopiedIdx((c) => (c === idx ? null : c)), 1600);
+  };
+
+  // Mirror the thread into the client's memory profile whenever it changes.
+  useEffect(() => {
+    const k = clientKey(respClientName);
+    if (!k || !convo.length) return;
+    setMemory((m) => {
+      const prev = (m.clients || {})[k] || { name: respClientName.trim(), notes: "" };
+      return { ...m, clients: { ...(m.clients || {}), [k]: { ...prev, name: respClientName.trim(), convo, updatedAt: Date.now() } } };
+    });
+  }, [convo, respClientName]);
+
+  const loadClient = (k) => {
+    const c = (memory.clients || {})[k];
+    if (!c) return;
+    setRespClientName(c.name);
+    setConvo(c.convo || []);
+    setAiDrafts([]);
+    setTab("respond");
+  };
+  const updateClientNotes = (k, notes) => setMemory((m) => ({ ...m, clients: { ...m.clients, [k]: { ...m.clients[k], notes, updatedAt: Date.now() } } }));
+  const deleteClient = (k) => setMemory((m) => { const c = { ...m.clients }; delete c[k]; return { ...m, clients: c }; });
+  const addNote = () => {
+    const t = newNote.trim();
+    if (!t) return;
+    setMemory((m) => ({ ...m, notes: [...(m.notes || []), { id: Date.now(), text: t }] }));
+    setNewNote("");
+  };
+  const deleteNote = (id) => setMemory((m) => ({ ...m, notes: m.notes.filter((n) => n.id !== id) }));
+  const exportMemory = () => {
+    const blob = new Blob([JSON.stringify(memory, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `lead-desk-memory-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const importMemory = (file) => {
+    if (!file) return;
+    file.text().then((txt) => {
+      const d = JSON.parse(txt);
+      if (!d || typeof d !== "object" || !Array.isArray(d.notes) || typeof d.clients !== "object") throw new Error();
+      setMemory((m) => ({ notes: [...(m.notes || []), ...d.notes.filter((n) => !(m.notes || []).some((x) => x.id === n.id))], clients: { ...(m.clients || {}), ...d.clients } }));
+      setMemMsg("Memory imported.");
+    }).catch(() => setMemMsg("That file isn't a Lead Desk memory export."));
   };
 
   const resetConvo = () => {
@@ -1185,6 +1250,7 @@ function App() {
             { id: "posts", label: "Post generator" },
             { id: "review", label: "Resume reviewer" },
             { id: "ranking", label: "Ranking template" },
+            { id: "memory", label: "Memory" },
           ].map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               padding: "10px 18px", background: tab === t.id ? PAPER : "transparent", color: tab === t.id ? INK : "#9AA3B0",
@@ -1939,6 +2005,57 @@ function App() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === "memory" && (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
+                What the desk remembers. Standing notes go into every AI reply; client profiles keep each client's thread and notes. Saved in this browser — export to back up or move devices.
+              </p>
+
+              <label style={labelStyle}>STANDING NOTES</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                {(memory.notes || []).length === 0 && <div style={{ fontSize: 13, color: "#8A8272" }}>None yet. e.g. "Holiday closure Dec 22 – Jan 2; quote turnaround from Jan 5."</div>}
+                {(memory.notes || []).map((n) => (
+                  <div key={n.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "8px 12px" }}>
+                    <div style={{ flex: 1, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.text}</div>
+                    <button onClick={() => deleteNote(n.id)} title="Forget" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+                <input value={newNote} onChange={(e) => setNewNote(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addNote()} placeholder="Add something to remember…" style={{ ...selectStyle, flex: 1 }} />
+                <button onClick={addNote} style={{ padding: "8px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 13 }}>Remember</button>
+              </div>
+
+              <label style={labelStyle}>CLIENTS ({Object.keys(memory.clients || {}).length})</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+                {Object.keys(memory.clients || {}).length === 0 && <div style={{ fontSize: 13, color: "#8A8272" }}>Enter a client name on "Respond to client" and the thread is saved here automatically.</div>}
+                {Object.entries(memory.clients || {}).sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).map(([k, c]) => (
+                  <div key={k} style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{c.name}
+                        <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginLeft: 8, fontWeight: 400 }}>{(c.convo || []).length} msgs{c.updatedAt ? ` · ${formatSavedAt(c.updatedAt)}` : ""}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <button onClick={() => loadClient(k)} style={{ background: "none", border: "none", color: BRASS, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Open thread</button>
+                        <button onClick={() => window.confirm(`Forget ${c.name}?`) && deleteClient(k)} style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 13 }}>Forget</button>
+                      </div>
+                    </div>
+                    <textarea value={c.notes || ""} onChange={(e) => updateClientNotes(k, e.target.value)} placeholder="Notes the AI should know (target role, package bought, preferences…)" rows={2} style={{ ...selectStyle, width: "100%", marginTop: 8, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <button onClick={exportMemory} style={{ padding: "8px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 13 }}>Export memory</button>
+                <label style={{ padding: "8px 16px", border: `1px solid ${INK}`, borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 13 }}>
+                  Import memory
+                  <input type="file" accept="application/json,.json" onChange={(e) => { importMemory(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+                </label>
+                {memMsg && <span style={{ fontSize: 13, color: "#5A5142" }}>{memMsg}</span>}
+              </div>
             </div>
           )}
 
