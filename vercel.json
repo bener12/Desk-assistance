@@ -1,9 +1,17 @@
 {
   "cleanUrls": true,
   "functions": {
-    "api/generate.js": { "maxDuration": 60 }
+    "api/generate.js": {
+      "maxDuration": 60
+    },
+    "api/memory.js": {
+      "maxDuration": 15
+    }
   },
   "rewrites": [
-    { "source": "/", "destination": "/index.html" }
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
   ]
 }
