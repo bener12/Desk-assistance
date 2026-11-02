@@ -944,10 +944,26 @@ function App() {
     reader.readAsDataURL(file);
   };
 
+  // Every post written in the app so far (week anchors and day posts), newest
+  // week first, so a caption can be written for one without re-pasting it.
+  const [postSavedKey, setPostSavedKey] = useState("");
+  const savedPostOptions = useMemo(() => {
+    const out = [];
+    savedWeeks.forEach((w) => {
+      if (w.anchor && w.anchor.rewritten) out.push({ key: `${w.id}-anchor`, group: w.plan.theme, label: "Anchor post", text: w.anchor.rewritten });
+      (w.plan.days || []).forEach((d, i) => {
+        const p = w.posts && w.posts[i];
+        if (p && p.post) out.push({ key: `${w.id}-${i}`, group: w.plan.theme, label: `${d.day}: ${d.topic}`, text: p.post });
+      });
+    });
+    return out;
+  }, [savedWeeks]);
+  const pickedPost = savedPostOptions.find((o) => o.key === postSavedKey) || null;
+
   const runPostGenerate = async () => {
-    const hasInput = postSourceMode === "text" ? !!postSourceText.trim() : !!postImageBase64;
+    const hasInput = postSourceMode === "text" ? !!postSourceText.trim() : postSourceMode === "saved" ? !!pickedPost : !!postImageBase64;
     if (!hasInput) {
-      setPostError(postTask === "rewrite" ? "Paste the original post text or a screenshot first." : postTask === "caption" ? "Upload the image/graphic or describe what the post is about first." : "Describe the topic or add a photo first.");
+      setPostError(postSourceMode === "saved" ? "Pick one of your saved posts first." : postTask === "rewrite" ? "Paste the original post text or a screenshot first." : postTask === "caption" ? "Upload the image/graphic or describe what the post is about first." : "Describe the topic or add a photo first.");
       return;
     }
     setPostError("");
@@ -961,7 +977,9 @@ function App() {
         keywords: postKeywords,
         formatPref: postTask === "create" ? postFormatPref : "",
         captionType: postCaptionType,
-        sourceText: postSourceText,
+        sourceText: postSourceMode === "saved"
+          ? `This is the full text of the LinkedIn post the caption is for. Write captions that frame and promote it, not a copy of it:\n${pickedPost.text}${postSourceText.trim() ? `\n\nUser's notes: ${postSourceText}` : ""}`
+          : postSourceText,
         contextNote: postContext,
         imageBase64: postSourceMode === "image" ? postImageBase64 : null,
         imageMediaType: postImageMediaType,
@@ -1716,13 +1734,13 @@ function App() {
 
 
               <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-                <button onClick={() => { setPostTask("rewrite"); setPostResult(null); setPostError(""); }} style={{
+                <button onClick={() => { setPostTask("rewrite"); if (postSourceMode === "saved") setPostSourceMode("text"); setPostResult(null); setPostError(""); }} style={{
                   flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
                   fontFamily: "'Courier New', monospace", fontSize: 12,
                   background: postTask === "rewrite" ? INK : "transparent", color: postTask === "rewrite" ? PAPER : INK,
                   border: `1px solid ${INK}`,
                 }}>Rewrite existing post</button>
-                <button onClick={() => { setPostTask("create"); setPostResult(null); setPostError(""); }} style={{
+                <button onClick={() => { setPostTask("create"); if (postSourceMode === "saved") setPostSourceMode("text"); setPostResult(null); setPostError(""); }} style={{
                   flex: 1, padding: "10px 12px", borderRadius: 6, cursor: "pointer",
                   fontFamily: "'Courier New', monospace", fontSize: 12,
                   background: postTask === "create" ? INK : "transparent", color: postTask === "create" ? PAPER : INK,
@@ -1785,7 +1803,44 @@ function App() {
                     background: postSourceMode === "image" ? INK : "transparent", color: postSourceMode === "image" ? PAPER : INK,
                     border: `1px solid ${INK}`,
                   }}>Upload or paste image</button>
+                  {postTask === "caption" && (
+                    <button onClick={() => setPostSourceMode("saved")} style={{
+                      flex: 1, padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                      fontFamily: "'Courier New', monospace", fontSize: 12,
+                      background: postSourceMode === "saved" ? INK : "transparent", color: postSourceMode === "saved" ? PAPER : INK,
+                      border: `1px solid ${INK}`,
+                    }}>Pick a saved post</button>
+                  )}
                 </div>
+
+                {postSourceMode === "saved" && (
+                  <div>
+                    <label style={labelStyle}>CHOOSE A POST YOU WROTE IN THE APP</label>
+                    {savedPostOptions.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#8A8272", fontFamily: "'Courier New', monospace", border: "1px dashed #D8D0BC", borderRadius: 6, padding: 12 }}>
+                        No saved posts yet. Build a week and write a day's post, and it will show up here.
+                      </div>
+                    ) : (
+                      <select value={postSavedKey} onChange={(e) => setPostSavedKey(e.target.value)} style={selectStyle}>
+                        <option value="">Select a post...</option>
+                        {[...new Set(savedPostOptions.map((o) => o.group))].map((g) => (
+                          <optgroup key={g} label={g}>
+                            {savedPostOptions.filter((o) => o.group === g).map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                          </optgroup>
+                        ))}
+                      </select>
+                    )}
+                    {pickedPost && (
+                      <div style={{ marginTop: 8, background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 6, padding: "10px 12px", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, maxHeight: 220, overflowY: "auto" }}>{pickedPost.text}</div>
+                    )}
+                    <textarea
+                      value={postSourceText}
+                      onChange={(e) => setPostSourceText(e.target.value)}
+                      placeholder="Any notes for the caption (optional)..."
+                      style={{ ...selectStyle, minHeight: 60, fontFamily: "inherit", resize: "vertical", marginTop: 10 }}
+                    />
+                  </div>
+                )}
 
                 {postSourceMode === "text" && (
                   <div>
