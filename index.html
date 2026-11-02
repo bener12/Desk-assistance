@@ -897,11 +897,18 @@ function App() {
     }
   };
 
+  // The week's own anchor post, so day posts still work after the post above
+  // is cleared (switching modes) or replaced.
+  const weekAnchorText = () => {
+    const saved = savedWeeks.find((w) => w.id === wkId);
+    return (saved && saved.anchor && saved.anchor.rewritten) || (postResult && postResult.rewritten) || "";
+  };
+
   const writeDayPost = async (i) => {
     setWkBusy((b) => ({ ...b, [i]: "post" }));
     setWkError("");
     try {
-      const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: postResult.rewritten });
+      const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: weekAnchorText() });
       setWkPosts((p) => ({ ...p, [i]: r }));
       setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
     } catch (e) {
