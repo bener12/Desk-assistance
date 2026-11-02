@@ -838,6 +838,10 @@ function App() {
   const [memory, setMemory] = usePersisted("memory", EMPTY_MEMORY);
   const [newNote, setNewNote] = useState("");
   const [memMsg, setMemMsg] = useState("");
+  const [syncKey, setSyncKey] = usePersisted("syncKey", "");
+  const [syncKeyInput, setSyncKeyInput] = useState("");
+  const [syncStatus, setSyncStatus] = useState(""); // "", "loading", "saving", "saved", or an error message
+  const [syncReady, setSyncReady] = useState(false);
   const [respTone, setRespTone] = useState("default");
   const [respModel, setRespModel] = useState("claude-sonnet-4-6");
   const [respMulti, setRespMulti] = useState(true); // true = 3 options, false = 1
@@ -1151,6 +1155,37 @@ function App() {
       setMemMsg("Memory imported.");
     }).catch(() => setMemMsg("That file isn't a Lead Desk memory export."));
   };
+
+  // ---- Cloud sync (Supabase via /api/memory) ----
+  // On connect: pull the cloud copy. If the cloud is empty, push this device's
+  // memory up; otherwise the cloud copy wins. After that, every change is saved
+  // back (debounced).
+  useEffect(() => {
+    if (!syncKey) { setSyncReady(false); return; }
+    let cancelled = false;
+    setSyncStatus("loading");
+    fetch("/api/memory", { headers: { "x-desk-key": syncKey } })
+      .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || `Sync failed (${r.status})`); return d; })
+      .then((d) => {
+        if (cancelled) return;
+        if (d.data && Array.isArray(d.data.notes)) setMemory(d.data);
+        setSyncReady(true);
+        setSyncStatus("saved");
+      })
+      .catch((e) => { if (!cancelled) { setSyncReady(false); setSyncStatus(e.message); } });
+    return () => { cancelled = true; };
+  }, [syncKey]);
+
+  useEffect(() => {
+    if (!syncKey || !syncReady) return;
+    setSyncStatus("saving");
+    const t = setTimeout(() => {
+      fetch("/api/memory", { method: "PUT", headers: { "Content-Type": "application/json", "x-desk-key": syncKey }, body: JSON.stringify({ data: memory }) })
+        .then(async (r) => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Sync failed (${r.status})`); } setSyncStatus("saved"); })
+        .catch((e) => setSyncStatus(e.message));
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [memory, syncReady]);
 
   const resetConvo = () => {
     setConvo([]);
@@ -2011,7 +2046,7 @@ function App() {
           {tab === "memory" && (
             <div>
               <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
-                What the desk remembers. Standing notes go into every AI reply; client profiles keep each client's thread and notes. Saved in this browser — export to back up or move devices.
+                What the desk remembers. Standing notes go into every AI reply; client profiles keep each client's thread and notes. Saved in this browser, and synced to the cloud once you connect below.
               </p>
 
               <label style={labelStyle}>STANDING NOTES</label>
@@ -2047,6 +2082,21 @@ function App() {
                   </div>
                 ))}
               </div>
+
+              <label style={labelStyle}>CLOUD SYNC (SUPABASE)</label>
+              {syncKey ? (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 24, fontSize: 13 }}>
+                  <span style={{ color: syncReady ? "#3C6E47" : "#9A3B2E" }}>
+                    {syncStatus === "loading" ? "Connecting…" : syncStatus === "saving" ? "Saving…" : syncStatus === "saved" ? "Synced — memory is shared across your devices." : syncStatus}
+                  </span>
+                  <button onClick={() => { setSyncKey(""); setSyncStatus(""); }} style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 13, textDecoration: "underline" }}>Disconnect</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+                  <input type="password" value={syncKeyInput} onChange={(e) => setSyncKeyInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && syncKeyInput.trim() && (setSyncKey(syncKeyInput.trim()), setSyncKeyInput(""))} placeholder="Memory passcode" style={{ ...selectStyle, flex: 1 }} />
+                  <button onClick={() => { if (syncKeyInput.trim()) { setSyncKey(syncKeyInput.trim()); setSyncKeyInput(""); } }} style={{ padding: "8px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 13 }}>Connect</button>
+                </div>
+              )}
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <button onClick={exportMemory} style={{ padding: "8px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 13 }}>Export memory</button>
