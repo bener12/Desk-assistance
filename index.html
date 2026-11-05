@@ -19,7 +19,33 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo, useEffect } = React;
+const { useState, useMemo, useEffect, useRef } = React;
+
+// A textarea that grows with its content, so generated text can be edited in
+// place and still reads like the page around it.
+function EditableText({ value, onChange, fontSize = 14 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+      spellCheck
+      style={{
+        width: "100%", border: "none", outline: "none", resize: "none", overflow: "hidden",
+        background: "transparent", color: INK, fontFamily: "inherit", fontSize, lineHeight: 1.6, padding: 0, display: "block",
+      }}
+    />
+  );
+}
+
+const EDIT_HINT = { fontSize: 11, color: "#8A8272", fontFamily: "'Courier New', monospace", marginTop: 6 };
 
 // useState that survives closing the app by mirroring the value into this
 // browser's localStorage. Storage can be blocked (private mode, quota), so
@@ -1331,13 +1357,26 @@ function App() {
         resumeText: usePdf ? "" : rvText,
         pdfBase64: usePdf ? rvPdf : null,
       });
+      const id = Date.now();
+      review._id = id;
       setRvResult(review);
-      setSavedReviews((list) => [{ id: Date.now(), review }, ...list].slice(0, HISTORY_LIMIT));
+      setSavedReviews((list) => [{ id, review }, ...list].slice(0, HISTORY_LIMIT));
     } catch (e) {
       setRvError("Couldn't review that — check connection and try again.");
     } finally {
       setRvLoading(false);
     }
+  };
+
+  // In-place edits to the review; also kept in its Past reviews entry.
+  const editReview = (patch) => {
+    const next = { ...rvResult, ...patch };
+    setRvResult(next);
+    if (next._id) setSavedReviews((list) => list.map((h) => (h.id === next._id ? { ...h, review: next } : h)));
+  };
+  const editReviewSection = (i, field, v) => {
+    if (i === 0) editReview({ verdict: v });
+    else editReview({ findings: rvResult.findings.map((f, j) => (j === i - 1 ? { ...f, [field]: v } : f)) });
   };
 
   const copyResumeReview = () => {
@@ -1976,9 +2015,9 @@ function App() {
                   <div style={{ position: "relative" }}>
                     <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
                       <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>
-                        {postTask === "rewrite" ? "REWRITTEN POST" : postTask === "caption" ? "CAPTION \u2014 OPTION 1" : "NEW POST"}
+                        {postTask === "rewrite" ? "REWRITTEN POST" : postTask === "caption" ? "CAPTION \u2014 OPTION 1" : "NEW POST"} &middot; CLICK TO EDIT
                       </div>
-                      {postResult.rewritten}
+                      <EditableText value={postResult.rewritten} onChange={(v) => setPostResult({ ...postResult, rewritten: v })} />
                     </div>
                     <button onClick={copyPostResult} style={{
                       marginTop: 12, padding: "9px 16px", background: postCopied ? SAFE : INK, color: PAPER, border: "none",
@@ -2007,8 +2046,8 @@ function App() {
                   {(postResult.alternatives || []).map((alt, k) => (
                     <div key={k} style={{ marginTop: 14 }}>
                       <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
-                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>CAPTION &mdash; OPTION {k + 2}</div>
-                        {alt}
+                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>CAPTION &mdash; OPTION {k + 2} &middot; CLICK TO EDIT</div>
+                        <EditableText value={alt} onChange={(v) => setPostResult({ ...postResult, alternatives: postResult.alternatives.map((a, j) => (j === k ? v : a)) })} />
                       </div>
                       <button onClick={() => { copyText(alt); setPostCopiedAlt(k); setTimeout(() => setPostCopiedAlt(null), 1600); }} style={{
                         marginTop: 8, padding: "7px 14px", background: postCopiedAlt === k ? SAFE : INK, color: PAPER, border: "none",
@@ -2074,7 +2113,14 @@ function App() {
 
                         {wkPosts[i] && (
                           <div style={{ marginTop: 12 }}>
-                            <div style={{ background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 6, padding: "12px 14px", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.6 }}>{wkPosts[i].post}</div>
+                            <div style={{ background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 6, padding: "12px 14px" }}>
+                              <EditableText fontSize={13} value={wkPosts[i].post} onChange={(v) => {
+                                const r = { ...wkPosts[i], post: v };
+                                setWkPosts((p) => ({ ...p, [i]: r }));
+                                setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
+                              }} />
+                            </div>
+                            <div style={EDIT_HINT}>Click the text to edit &mdash; changes save automatically.</div>
                             <button onClick={() => copyWk(`post${i}`, wkPosts[i].post)} style={{
                               marginTop: 8, padding: "6px 12px", background: wkCopied === `post${i}` ? SAFE : "transparent", color: wkCopied === `post${i}` ? PAPER : INK,
                               border: `1px solid ${wkCopied === `post${i}` ? SAFE : INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
@@ -2133,7 +2179,7 @@ function App() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
                     {savedReviews.map((h) => (
                       <div key={h.id} style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
-                        <button onClick={() => ((x) => setRvResult(x.review))(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: h.review === rvResult ? 700 : 400 }}>
+                        <button onClick={() => ((x) => setRvResult(x.review))(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: rvResult && (h.review === rvResult || h.id === rvResult._id) ? 700 : 400 }}>
                           <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(h.id)}</span>{h.review.clientName} &middot; {h.review.industry}
                         </button>
                         <button onClick={() => ((id) => setSavedReviews((list) => list.filter((r) => r.id !== id)))(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
@@ -2193,17 +2239,23 @@ function App() {
                     <div style={{ textAlign: "center", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>{rvResult.industry} RESUME REVIEW</div>
                     <div style={{ marginTop: 14, fontSize: 13 }}><b>For:</b> {rvResult.clientName}</div>
                     <div style={{ marginBottom: 12, fontSize: 13 }}><b>Prepared By:</b> Resume Reviewer</div>
-                    <p style={{ margin: "0 0 6px" }}>{rvResult.intro}</p>
+                    <div style={{ ...EDIT_HINT, marginTop: 0, marginBottom: 8 }}>Click any text to edit &mdash; the PDF and copy use your edits.</div>
+                    <div style={{ margin: "0 0 6px" }}><EditableText value={rvResult.intro} onChange={(v) => editReview({ intro: v })} /></div>
                     {resumeReviewSections(rvResult).map((s, i) => (
                       <div key={i}>
-                        <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>{i + 1}) {s.headline}</div>
-                        <p style={{ margin: 0 }}>{s.body}</p>
+                        <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4, display: "flex", gap: 4 }}>
+                          <span>{i + 1})</span>
+                          {i === 0 ? <span>{s.headline}</span> : (
+                            <input value={s.headline} onChange={(e) => editReviewSection(i, "headline", e.target.value)} style={{ flex: 1, border: "none", outline: "none", background: "transparent", font: "inherit", color: INK, padding: 0 }} />
+                          )}
+                        </div>
+                        <EditableText value={s.body} onChange={(v) => editReviewSection(i, "body", v)} />
                       </div>
                     ))}
                     <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>FINAL DIAGNOSIS</div>
-                    <p style={{ margin: 0 }}>{rvResult.diagnosis}</p>
+                    <EditableText value={rvResult.diagnosis} onChange={(v) => editReview({ diagnosis: v })} />
                     <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>BOTTOM LINE</div>
-                    <p style={{ margin: 0 }}>{rvResult.bottomLine}</p>
+                    <EditableText value={rvResult.bottomLine} onChange={(v) => editReview({ bottomLine: v })} />
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
                     <button onClick={copyResumeReview} style={{
