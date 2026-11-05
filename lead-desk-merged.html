@@ -1013,6 +1013,96 @@ function downloadWeeklyPlanPdf(plan, posts) {
   doc.save(`weekly_content_strategy_${plan.theme.toLowerCase().replace(/[^\w]+/g, "_").slice(0, 40)}.pdf`);
 }
 
+// ---- Document checker ------------------------------------------------------
+const DOC_ISSUE_TYPES = {
+  spelling: { label: "Spelling", color: "#9C3B3B" },
+  grammar: { label: "Grammar", color: "#B4532A" },
+  punctuation: { label: "Punctuation", color: "#8A6A1F" },
+  clarity: { label: "Clarity", color: "#2F6690" },
+  style: { label: "Style", color: "#6B4C9A" },
+  consistency: { label: "Consistency", color: "#3F6B4F" },
+  goal: { label: "Goal", color: "#1E2530" },
+};
+const DOC_CHUNK = 9000;
+
+// Splits long documents on paragraph breaks so each AI pass stays reliable.
+function splitDocument(text) {
+  const paras = text.split(/(\n\s*\n)/);
+  const chunks = [];
+  let cur = "";
+  paras.forEach((p) => {
+    if (cur.length + p.length > DOC_CHUNK && cur.trim()) { chunks.push(cur); cur = ""; }
+    cur += p;
+  });
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
+}
+
+async function checkDocumentPart({ part, index, total, goal, docType, tone }) {
+  const text = `You are a meticulous professional editor. Review the document ${total > 1 ? `PART ${index + 1} of ${total}` : "below"}.
+Document type: ${docType || "general document"}. Desired tone: ${tone || "keep the author's tone"}.
+What the author wants to achieve with this document: ${goal ? `"""${goal}"""` : "not stated"}
+
+Find every real issue: spelling, grammar, punctuation, word choice and clarity, consistency (tense, names, numbers, formatting), style (wordiness, repetition, passive voice where it weakens the text), and "goal" issues (sentences that work against what the author wants to achieve, or a missing point the goal needs).
+Rules:
+- "original" must be copied EXACTLY, character for character, from the document: only the words that change, plus a few neighbouring words if needed to make it unique. Never paraphrase it.
+- "suggestion" is the exact replacement text for "original". For a missing-point goal issue, quote the sentence after which it belongs and give that sentence plus the addition.
+- Keep the author's voice and meaning. Never invent facts. Do not flag text that is already correct.
+- Do not use em dashes in suggestions.
+- "why" is one short sentence.
+
+Respond ONLY with valid JSON, no markdown fences, in this exact shape:
+{"summary": "${index === 0 ? "2-3 sentences: overall quality and the biggest problems" : ""}", "goalScore": ${index === 0 ? "0-100 how well the document serves the stated goal (or null if no goal)" : "null"}, "goalNotes": [${index === 0 ? '"up to 4 short notes on how to better achieve the goal"' : ""}], "issues": [{"type": "spelling|grammar|punctuation|clarity|style|consistency|goal", "original": "exact text", "suggestion": "replacement", "why": "short reason"}]}
+
+DOCUMENT${total > 1 ? ` PART ${index + 1}` : ""}:
+"""${part}"""`;
+  return callClaudeJSON([{ type: "text", text }], { max_tokens: 6000 });
+}
+
+// Places each pending issue on the text (first unclaimed match, in order) and
+// returns render segments plus which issues could not be found any more.
+function layoutIssues(text, issues) {
+  const ranges = [];
+  const missing = new Set();
+  issues.filter((x) => x.status === "pending").forEach((x) => {
+    let from = 0, at = -1;
+    while ((at = text.indexOf(x.original, from)) !== -1) {
+      const end = at + x.original.length;
+      if (!ranges.some((r) => at < r.end && end > r.start)) break;
+      from = at + 1;
+    }
+    if (at === -1 || !x.original) missing.add(x.id);
+    else ranges.push({ start: at, end: at + x.original.length, issue: x });
+  });
+  ranges.sort((a, b) => a.start - b.start);
+  const segs = [];
+  let pos = 0;
+  ranges.forEach((r) => {
+    if (r.start > pos) segs.push({ text: text.slice(pos, r.start) });
+    segs.push({ text: text.slice(r.start, r.end), issue: r.issue });
+    pos = r.end;
+  });
+  if (pos < text.length) segs.push({ text: text.slice(pos) });
+  return { segs, missing };
+}
+
+function downloadDocPdf(title, text) {
+  const doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+  const margin = 60, width = doc.internal.pageSize.getWidth() - margin * 2, bottom = doc.internal.pageSize.getHeight() - margin;
+  let y = margin;
+  const clean = (t) => String(t || "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...").replace(/[^\x00-\xFF]/g, "");
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  clean(text).split("\n").forEach((para) => {
+    (para ? doc.splitTextToSize(para, width) : [""]).forEach((line) => {
+      if (y + 15 > bottom) { doc.addPage(); y = margin; }
+      doc.text(line, margin, y);
+      y += 15.4;
+    });
+  });
+  doc.save(`${(title || "document").replace(/[^\w]+/g, "_").slice(0, 50)}_corrected.pdf`);
+}
+
 function verdict(score, max) {
   const pct = max ? score / max : 0;
   if (pct >= 0.55) return { text: "Looks likely fake or low-value — verify before spending time", color: RISK, glyph: "⚠" };
@@ -1487,6 +1577,151 @@ function App() {
   const [rvCopied, setRvCopied] = useState(false);
   const [savedReviews, setSavedReviews] = usePersisted("savedReviews", []);
 
+  // ---- Document checker state ----
+  const [docTitle, setDocTitle] = usePersisted("docTitle", "");
+  const [docType, setDocType] = usePersisted("docType", "Business document");
+  const [docTone, setDocTone] = usePersisted("docTone", "Keep my tone");
+  const [docGoal, setDocGoal] = usePersisted("docGoal", "");
+  const [docText, setDocText] = usePersisted("docText", "");
+  const [docIssues, setDocIssues] = usePersisted("docIssues", []);
+  const [docLog, setDocLog] = usePersisted("docLog", []);
+  const [docReport, setDocReport] = usePersisted("docReport", null);
+  const [docId, setDocId] = usePersisted("docId", null);
+  const [savedDocs, setSavedDocs] = usePersisted("savedDocs", []);
+  const [docView, setDocView] = useState("review");
+  const [docFilter, setDocFilter] = useState("all");
+  const [docActive, setDocActive] = useState(null);
+  const [docBusy, setDocBusy] = useState("");
+  const [docError, setDocError] = useState("");
+  const [docCopied, setDocCopied] = useState(false);
+  const docEditStart = useRef(null);
+
+  const logDoc = (entry) => setDocLog((l) => [{ id: Date.now() + Math.random(), at: Date.now(), ...entry }, ...l].slice(0, 300));
+
+  const loadDocFile = (file) => {
+    if (!file) return;
+    setDocError("");
+    if (!docTitle) setDocTitle(file.name.replace(/\.[^.]+$/, ""));
+    const reader = new FileReader();
+    if (/\.docx$/i.test(file.name)) {
+      reader.onload = () => window.mammoth.extractRawText({ arrayBuffer: reader.result })
+        .then((r) => { setDocText(r.value.replace(/\n{3,}/g, "\n\n").trim()); setDocIssues([]); setDocReport(null); })
+        .catch(() => setDocError("Couldn't read that Word file — try pasting the text."));
+      reader.readAsArrayBuffer(file);
+    } else if (/\.(txt|md)$/i.test(file.name) || file.type.startsWith("text/")) {
+      reader.onload = () => { setDocText(String(reader.result)); setDocIssues([]); setDocReport(null); };
+      reader.readAsText(file);
+    } else if (/\.pdf$/i.test(file.name)) {
+      reader.onload = async () => {
+        setDocBusy("reading");
+        try {
+          const out = await callClaudeText([
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: reader.result.split(",")[1] } },
+            { type: "text", text: "Transcribe the full text of this document exactly as written, keeping paragraph breaks. Do not correct anything. Output only the text." },
+          ], { max_tokens: 8000 });
+          setDocText(out); setDocIssues([]); setDocReport(null);
+        } catch (e) { setDocError(`Couldn't read that PDF (${e.message}).`); }
+        finally { setDocBusy(""); }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setDocError("Upload a .docx, .pdf or .txt file, or paste the text.");
+    }
+  };
+
+  const runDocCheck = async () => {
+    if (!docText.trim()) { setDocError("Paste or upload your document first."); return; }
+    setDocError("");
+    setDocBusy("checking");
+    setDocView("review");
+    try {
+      const parts = splitDocument(docText);
+      const results = [];
+      for (let i = 0; i < parts.length; i++) {
+        setDocBusy(`checking${parts.length > 1 ? ` part ${i + 1} of ${parts.length}` : ""}`);
+        results.push(await checkDocumentPart({ part: parts[i], index: i, total: parts.length, goal: docGoal, docType, tone: docTone }));
+      }
+      const stamp = Date.now();
+      const issues = results.flatMap((r) => r.issues || [])
+        .filter((x) => x && x.original && x.suggestion !== undefined && x.original !== x.suggestion && docText.includes(x.original))
+        .map((x, k) => ({ ...x, type: DOC_ISSUE_TYPES[x.type] ? x.type : "style", id: `${stamp}-${k}`, status: "pending" }));
+      setDocIssues(issues);
+      setDocReport({ summary: results[0].summary, goalScore: results[0].goalScore, goalNotes: results.flatMap((r) => r.goalNotes || []).filter(Boolean).slice(0, 6), checkedAt: stamp });
+      logDoc({ kind: "check", text: `Checked document: ${issues.length} issue(s) found` });
+      if (!docId) setDocId(stamp);
+    } catch (e) {
+      setDocError(`Couldn't check the document (${e.message}) — try again.`);
+    } finally {
+      setDocBusy("");
+    }
+  };
+
+  const resolveIssue = (issue, action, replacement) => {
+    if (action === "accept") {
+      const to = replacement !== undefined ? replacement : issue.suggestion;
+      const { segs } = layoutIssues(docText, [issue]);
+      let pos = 0, at = -1;
+      segs.forEach((g) => { if (g.issue && at === -1) at = pos; pos += g.text.length; });
+      if (at === -1) { setDocError("That text has changed since the check, so the fix can't be placed. Edit it by hand or re-check."); return; }
+      setDocText(docText.slice(0, at) + to + docText.slice(at + issue.original.length));
+      logDoc({ kind: "accepted", type: issue.type, from: issue.original, to });
+      setDocIssues((l) => l.map((x) => (x.id === issue.id ? { ...x, status: "accepted", applied: to } : x)));
+    } else {
+      logDoc({ kind: "rejected", type: issue.type, from: issue.original, to: issue.suggestion });
+      setDocIssues((l) => l.map((x) => (x.id === issue.id ? { ...x, status: "rejected" } : x)));
+    }
+    setDocActive(null);
+  };
+
+  // Puts an accepted change back to the original wording.
+  const undoIssue = (issue) => {
+    const at = docText.indexOf(issue.applied);
+    if (at === -1) { setDocError("That change has been edited since, so it can't be undone automatically."); return; }
+    setDocText(docText.slice(0, at) + issue.original + docText.slice(at + issue.applied.length));
+    logDoc({ kind: "undone", type: issue.type, from: issue.applied, to: issue.original });
+    setDocIssues((l) => l.map((x) => (x.id === issue.id ? { ...x, status: "pending", applied: undefined } : x)));
+  };
+
+  const acceptAllDoc = (type) => {
+    let text = docText;
+    const done = [];
+    docIssues.filter((x) => x.status === "pending" && (type === "all" || x.type === type)).forEach((x) => {
+      const at = text.indexOf(x.original);
+      if (at === -1) return;
+      text = text.slice(0, at) + x.suggestion + text.slice(at + x.original.length);
+      done.push(x.id);
+    });
+    if (!done.length) return;
+    setDocText(text);
+    setDocIssues((l) => l.map((x) => (done.includes(x.id) ? { ...x, status: "accepted", applied: x.suggestion } : x)));
+    logDoc({ kind: "accepted", type: type === "all" ? "all" : type, from: `${done.length} change(s)`, to: "accepted together" });
+  };
+
+  const switchDocView = (v) => {
+    if (v === "edit") docEditStart.current = docText;
+    if (v === "review" && docEditStart.current !== null && docEditStart.current !== docText) logDoc({ kind: "manual", text: "Edited the text by hand" });
+    if (v === "review") docEditStart.current = null;
+    setDocView(v);
+  };
+
+  const newDocument = () => {
+    setDocId(null); setDocTitle(""); setDocGoal(""); setDocText(""); setDocIssues([]); setDocLog([]); setDocReport(null); setDocError(""); setDocView("review");
+  };
+  const openSavedDoc = (d) => {
+    setDocId(d.id); setDocTitle(d.title || ""); setDocType(d.docType || "Business document"); setDocTone(d.tone || "Keep my tone"); setDocGoal(d.goal || "");
+    setDocText(d.text || ""); setDocIssues(d.issues || []); setDocLog(d.log || []); setDocReport(d.report || null); setDocView("review"); setDocError("");
+  };
+
+  // Keep the current document in the saved list (and so in the cloud) as it changes.
+  useEffect(() => {
+    if (!docId) return;
+    const t = setTimeout(() => {
+      const entry = { id: docId, savedAt: docId, updatedAt: Date.now(), title: docTitle || "Untitled document", docType, tone: docTone, goal: docGoal, text: docText, issues: docIssues, log: docLog, report: docReport };
+      setSavedDocs((l) => [entry, ...l.filter((x) => x.id !== docId)].slice(0, HISTORY_LIMIT));
+    }, 800);
+    return () => clearTimeout(t);
+  }, [docId, docTitle, docType, docTone, docGoal, docText, docIssues, docLog, docReport]);
+
   const loadResumeFile = (file) => {
     if (!file) return;
     setRvError("");
@@ -1581,6 +1816,7 @@ function App() {
         setSavedPosts((l) => mergeById(l, c.savedPosts, gone));
         setSavedWeeks((l) => mergeById(l, c.savedWeeks, gone));
         setSavedReviews((l) => mergeById(l, c.savedReviews, gone));
+        setSavedDocs((l) => mergeById(l, c.savedDocs, gone));
         setContentReady(true);
       })
       .catch((e) => { if (!cancelled) { setContentReady(false); setContentStatus(e.message); } });
@@ -1594,13 +1830,13 @@ function App() {
       fetch("/api/memory?doc=content", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "x-desk-key": syncKey },
-        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, deletedIds } }),
+        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, savedDocs, deletedIds } }),
       })
         .then(async (r) => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Sync failed (${r.status})`); } setContentStatus("saved"); })
         .catch((e) => setContentStatus(e.message));
     }, 1500);
     return () => clearTimeout(t);
-  }, [savedPosts, savedWeeks, savedReviews, deletedIds, contentReady]);
+  }, [savedPosts, savedWeeks, savedReviews, savedDocs, deletedIds, contentReady]);
 
   const cloudBanner = (
     <div style={{ background: "#fff", border: `1px solid ${syncKey && contentStatus === "saved" ? SAFE : "#D8D0BC"}`, borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12.5, fontFamily: "'Courier New', monospace" }}>
@@ -1648,6 +1884,7 @@ function App() {
             { id: "screen", label: "Check if real" },
             { id: "posts", label: "Post generator" },
             { id: "review", label: "Resume reviewer" },
+            { id: "grammar", label: "Document checker" },
             { id: "ranking", label: "Ranking template" },
             { id: "memory", label: "Memory" },
           ].map((t) => (
@@ -2426,6 +2663,201 @@ function App() {
               )}
             </div>
           )}
+
+          {tab === "grammar" && (() => {
+            const { segs, missing } = layoutIssues(docText || "", docIssues);
+            const pending = docIssues.filter((x) => x.status === "pending" && !missing.has(x.id));
+            const shown = pending.filter((x) => docFilter === "all" || x.type === docFilter);
+            const counts = Object.keys(DOC_ISSUE_TYPES).map((k) => [k, pending.filter((x) => x.type === k).length]).filter(([, n]) => n);
+            const resolved = docIssues.filter((x) => x.status !== "pending");
+            const words = (docText || "").trim() ? docText.trim().split(/\s+/).length : 0;
+            const chipBtn = (on) => ({ padding: "5px 10px", borderRadius: 14, border: `1px solid ${on ? INK : "#D8D0BC"}`, background: on ? INK : "#fff", color: on ? PAPER : INK, fontFamily: "'Courier New', monospace", fontSize: 11.5, cursor: "pointer" });
+            const smallBtn = (bg, fg, border) => ({ padding: "6px 12px", background: bg, color: fg, border: border || "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer" });
+            return (
+            <div>
+              <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 14, fontFamily: "'Courier New', monospace" }}>
+                Check any document for errors, see every change tracked in the text, and accept, reject or edit each one on the spot.
+              </p>
+
+              {cloudBanner}
+
+              {savedDocs.length > 0 && (
+                <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px", marginBottom: 14 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>My documents ({savedDocs.length})</summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                    {savedDocs.map((d) => (
+                      <div key={d.id} style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
+                        <button onClick={() => openSavedDoc(d)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: d.id === docId ? 700 : 400 }}>
+                          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(d.updatedAt || d.savedAt)}</span>{d.title}
+                        </button>
+                        <button onClick={() => { setSavedDocs((l) => l.filter((x) => x.id !== d.id)); forget(d.id); if (d.id === docId) newDocument(); }} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "14px 16px", marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: "2 1 220px" }}>
+                    <label style={labelStyle}>DOCUMENT NAME</label>
+                    <input value={docTitle} onChange={(e) => setDocTitle(e.target.value)} placeholder="e.g. Proposal for Acme" style={selectStyle} />
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={labelStyle}>TYPE</label>
+                    <select value={docType} onChange={(e) => setDocType(e.target.value)} style={selectStyle}>
+                      {["Business document", "Resume / CV", "Cover letter", "Proposal", "Email", "Report", "Academic paper", "Blog / LinkedIn article", "Website copy", "Other"].map((o) => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={labelStyle}>TONE</label>
+                    <select value={docTone} onChange={(e) => setDocTone(e.target.value)} style={selectStyle}>
+                      {["Keep my tone", "Formal", "Professional but warm", "Friendly", "Persuasive", "Academic", "Simple and clear"].map((o) => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={labelStyle}>WHAT DO YOU WANT TO ACHIEVE WITH THIS DOCUMENT?</label>
+                  <textarea value={docGoal} onChange={(e) => setDocGoal(e.target.value)} placeholder="e.g. Win a $5k website project from a small law firm; show I understand their problem and make it easy to say yes." style={{ ...selectStyle, minHeight: 64, fontFamily: "inherit", resize: "vertical" }} />
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <input type="file" accept=".docx,.pdf,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(e) => loadDocFile(e.target.files[0])} style={{ fontFamily: "'Courier New', monospace", fontSize: 12 }} />
+                  <span style={{ fontSize: 11.5, color: "#8A8272", fontFamily: "'Courier New', monospace" }}>or paste / type below &middot; {words} words</span>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                <button onClick={runDocCheck} disabled={!!docBusy} style={{ ...smallBtn(INK, PAPER), padding: "9px 16px", fontSize: 13, opacity: docBusy ? 0.6 : 1 }}>
+                  {docBusy === "reading" ? "Reading PDF..." : docBusy.startsWith("checking") ? `Checking${docBusy.slice(8)}...` : docReport ? "Re-check document" : "Check document"}
+                </button>
+                <button onClick={() => { copyText(docText); setDocCopied(true); setTimeout(() => setDocCopied(false), 1600); }} disabled={!docText} style={{ ...smallBtn(docCopied ? SAFE : "transparent", docCopied ? PAPER : INK, `1px solid ${docCopied ? SAFE : INK}`), padding: "9px 16px", fontSize: 13 }}>{docCopied ? "Copied" : "Copy text"}</button>
+                <button onClick={() => downloadDocPdf(docTitle, docText)} disabled={!docText} style={{ ...smallBtn("transparent", INK, `1px solid ${INK}`), padding: "9px 16px", fontSize: 13 }}>Download PDF</button>
+                <button onClick={newDocument} style={{ ...smallBtn("transparent", "#8A8272", "1px solid #D8D0BC"), padding: "9px 16px", fontSize: 13 }}>New document</button>
+              </div>
+
+              {docError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{docError}</p>}
+
+              {docReport && (
+                <div style={{ padding: "14px 16px", borderRadius: 6, background: INK, marginBottom: 14, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  {docReport.goalScore !== null && docReport.goalScore !== undefined && docGoal && (
+                    <div style={{ textAlign: "center", minWidth: 80 }}>
+                      <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11 }}>GOAL FIT</div>
+                      <div style={{ color: PAPER, fontSize: 30, fontWeight: 700 }}>{docReport.goalScore}</div>
+                      <div style={{ color: "#9AA3B0", fontSize: 11 }}>out of 100</div>
+                    </div>
+                  )}
+                  <div style={{ flex: "1 1 240px" }}>
+                    <div style={{ color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11, marginBottom: 4 }}>OVERVIEW &middot; {pending.length} open &middot; {resolved.length} resolved</div>
+                    <div style={{ color: PAPER, fontSize: 13, lineHeight: 1.6 }}>{docReport.summary}</div>
+                    {(docReport.goalNotes || []).length > 0 && (
+                      <ul style={{ color: "#C9CED6", fontSize: 12.5, lineHeight: 1.6, margin: "8px 0 0", paddingLeft: 18 }}>
+                        {docReport.goalNotes.map((n, i) => <li key={i}>{n}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div style={{ flex: "3 1 380px", minWidth: 0, background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6 }}>
+                  <div style={{ display: "flex", gap: 6, padding: "10px 12px", borderBottom: "1px solid #EEE8DA", alignItems: "center", flexWrap: "wrap" }}>
+                    <button onClick={() => switchDocView("review")} style={chipBtn(docView === "review")}>Tracked changes</button>
+                    <button onClick={() => switchDocView("edit")} style={chipBtn(docView === "edit")}>Edit text</button>
+                    <span style={{ fontSize: 11, color: "#8A8272", fontFamily: "'Courier New', monospace", marginLeft: "auto" }}>
+                      {docView === "review" ? "Click a highlight to fix it" : "Type freely · highlight words for AI options"}
+                    </span>
+                  </div>
+                  <div style={{ padding: "16px 18px", fontSize: 14.5, lineHeight: 1.75, color: INK, minHeight: 220 }}>
+                    {docView === "edit" || !docText ? (
+                      docText || docView === "edit" ? (
+                        <EditableText aiKind={`${docType} (document)`} value={docText} onChange={setDocText} fontSize={14.5} />
+                      ) : (
+                        <textarea value={docText} onChange={(e) => setDocText(e.target.value)} placeholder="Paste or type your document here..." style={{ width: "100%", minHeight: 220, border: "none", outline: "none", resize: "vertical", fontFamily: "inherit", fontSize: 14.5, color: INK, background: "transparent" }} />
+                      )
+                    ) : (
+                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {segs.map((g, k) => g.issue ? (
+                          <span key={k} onClick={() => setDocActive(g.issue.id)} title={`${DOC_ISSUE_TYPES[g.issue.type].label}: ${g.issue.why || ""}`} style={{
+                            cursor: "pointer", borderBottom: `2px solid ${DOC_ISSUE_TYPES[g.issue.type].color}`,
+                            background: docActive === g.issue.id ? "#F3E3B8" : "rgba(156,122,50,0.10)", borderRadius: 2,
+                            opacity: docFilter === "all" || docFilter === g.issue.type ? 1 : 0.5,
+                          }}>
+                            {docActive === g.issue.id ? (
+                              <>
+                                <span style={{ textDecoration: "line-through", color: RISK }}>{g.text}</span>
+                                <span style={{ color: SAFE, fontWeight: 600 }}>{g.issue.suggestion ? ` ${g.issue.suggestion}` : " (remove)"}</span>
+                              </>
+                            ) : g.text}
+                          </span>
+                        ) : <span key={k}>{g.text}</span>)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ flex: "2 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "12px 14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>Suggestions ({pending.length})</div>
+                      {pending.length > 0 && <button onClick={() => acceptAllDoc(docFilter)} style={smallBtn(SAFE, PAPER)}>Accept all{docFilter !== "all" ? ` ${DOC_ISSUE_TYPES[docFilter].label.toLowerCase()}` : ""}</button>}
+                    </div>
+                    {counts.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                        <button onClick={() => setDocFilter("all")} style={chipBtn(docFilter === "all")}>All {pending.length}</button>
+                        {counts.map(([k, n]) => <button key={k} onClick={() => setDocFilter(k)} style={chipBtn(docFilter === k)}>{DOC_ISSUE_TYPES[k].label} {n}</button>)}
+                      </div>
+                    )}
+                    {!docReport && <div style={{ fontSize: 12.5, color: "#8A8272" }}>Add your document and goal, then click Check document.</div>}
+                    {docReport && pending.length === 0 && <div style={{ fontSize: 12.5, color: SAFE }}>No open suggestions. Re-check after big edits.</div>}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 560, overflowY: "auto" }}>
+                      {shown.map((x) => (
+                        <div key={x.id} onClick={() => setDocActive(x.id)} style={{ border: `1px solid ${docActive === x.id ? BRASS : "#EEE8DA"}`, borderLeft: `4px solid ${DOC_ISSUE_TYPES[x.type].color}`, borderRadius: 6, padding: "8px 10px", cursor: "pointer", background: docActive === x.id ? "#FBF6E9" : "#fff" }}>
+                          <div style={{ fontSize: 10.5, fontFamily: "'Courier New', monospace", color: DOC_ISSUE_TYPES[x.type].color, letterSpacing: 0.5, marginBottom: 4 }}>{DOC_ISSUE_TYPES[x.type].label.toUpperCase()}</div>
+                          <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                            <span style={{ textDecoration: "line-through", color: RISK }}>{x.original}</span>{" → "}
+                            <span style={{ color: SAFE, fontWeight: 600 }}>{x.suggestion || "(remove)"}</span>
+                          </div>
+                          {x.why && <div style={{ fontSize: 12, color: "#5A5142", marginTop: 4 }}>{x.why}</div>}
+                          {docActive === x.id && (
+                            <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 8 }}>
+                              <input defaultValue={x.suggestion} id={`fix-${x.id}`} style={{ ...selectStyle, fontSize: 13, padding: "6px 8px", marginBottom: 6 }} />
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                <button onClick={() => resolveIssue(x, "accept")} style={smallBtn(SAFE, PAPER)}>Accept</button>
+                                <button onClick={() => resolveIssue(x, "accept", document.getElementById(`fix-${x.id}`).value)} style={smallBtn(BRASS, PAPER)}>Use my edit</button>
+                                <button onClick={() => resolveIssue(x, "reject")} style={smallBtn("transparent", INK, `1px solid ${INK}`)}>Reject</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {docLog.length > 0 && (
+                    <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px" }}>
+                      <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Change history ({docLog.length})</summary>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, maxHeight: 320, overflowY: "auto" }}>
+                        {docLog.map((l) => {
+                          const issue = l.kind === "accepted" && docIssues.find((x) => x.status === "accepted" && x.original === l.from && x.applied === l.to);
+                          return (
+                            <div key={l.id} style={{ fontSize: 12, borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
+                              <span style={{ fontFamily: "'Courier New', monospace", color: "#8A8272", marginRight: 6 }}>{formatSavedAt(l.at)}</span>
+                              <b style={{ color: l.kind === "accepted" ? SAFE : l.kind === "rejected" ? RISK : INK }}>{l.kind === "check" ? "Checked" : l.kind === "manual" ? "Manual edit" : l.kind[0].toUpperCase() + l.kind.slice(1)}</b>
+                              {l.text ? ` · ${l.text}` : (
+                                <> &middot; <span style={{ textDecoration: "line-through", color: RISK }}>{l.from}</span> &rarr; <span style={{ color: SAFE }}>{l.to}</span></>
+                              )}
+                              {issue && <button onClick={() => undoIssue(issue)} style={{ marginLeft: 8, background: "none", border: "none", padding: 0, color: BRASS, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>Undo</button>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </div>
+            </div>
+            );
+          })()}
 
           {tab === "review" && (
             <div>
