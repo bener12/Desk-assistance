@@ -207,6 +207,20 @@ function usePersisted(key, initial) {
 
 const HISTORY_LIMIT = 50;
 
+// Merges two saved lists by id (newest edit wins) and drops anything deleted
+// on either device, so syncing never loses work from one side.
+function mergeById(a, b, deleted) {
+  const gone = new Set(deleted || []);
+  const stamp = (x) => x.updatedAt || x.savedAt || x.id || 0;
+  const byId = new Map();
+  [...(a || []), ...(b || [])].forEach((x) => {
+    if (!x || gone.has(x.id)) return;
+    const cur = byId.get(x.id);
+    if (!cur || stamp(x) > stamp(cur)) byId.set(x.id, x);
+  });
+  return [...byId.values()].sort((x, y) => y.id - x.id).slice(0, HISTORY_LIMIT * 4);
+}
+
 // ---- Persistent memory -------------------------------------------------
 // Standing notes (apply to every reply) and per-client profiles (notes +
 // saved conversation thread). Lives in localStorage under "leaddesk:memory"
@@ -1070,6 +1084,9 @@ function App() {
   const [wkNotes, setWkNotes] = useState({});
   const [wkId, setWkId] = usePersisted("wkId", null);
   const [savedWeeks, setSavedWeeks] = usePersisted("savedWeeks", []);
+  const [savedPosts, setSavedPosts] = usePersisted("savedPosts", []);
+  const [deletedIds, setDeletedIds] = usePersisted("deletedIds", []);
+  const forget = (id) => setDeletedIds((d) => [...d, id].slice(-500));
   const [wkCopied, setWkCopied] = useState(null);
 
   const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkNotes({}); setWkId(null); setWkBusy({}); setWkError(""); };
@@ -1104,7 +1121,7 @@ function App() {
     try {
       const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: weekAnchorText(), direction: (wkNotes[i] || "").trim() });
       setWkPosts((p) => ({ ...p, [i]: r }));
-      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
+      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r }, updatedAt: Date.now() } : w)));
     } catch (e) {
       setWkError(`Couldn't write ${wkPlan.days[i].day}'s post (${e.message}) — try again.`);
     } finally {
@@ -1121,7 +1138,7 @@ function App() {
       const post = await reviseWithDirection({ text: wkPosts[i].post, direction, niche: postNiche, keywords: postKeywords });
       const r = { ...wkPosts[i], post };
       setWkPosts((p) => ({ ...p, [i]: r }));
-      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
+      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r }, updatedAt: Date.now() } : w)));
       setWkNotes((n) => ({ ...n, [i]: "" }));
     } catch (e) {
       setWkError(`Couldn't revise ${wkPlan.days[i].day}'s post (${e.message}) \u2014 try again.`);
@@ -1143,6 +1160,7 @@ function App() {
 
   const deleteSavedWeek = (id) => {
     setSavedWeeks((list) => list.filter((w) => w.id !== id));
+    forget(id);
     if (id === wkId) resetWeek();
   };
 
@@ -1203,7 +1221,10 @@ function App() {
         imageBase64: postSourceMode === "image" ? postImageBase64 : null,
         imageMediaType: postImageMediaType,
       });
+      const id = Date.now();
+      result._id = id;
       setPostResult(result);
+      setSavedPosts((list) => [{ id, savedAt: id, updatedAt: id, task: postTask, niche: postNiche, result }, ...list].slice(0, HISTORY_LIMIT * 4));
     } catch (e) {
       setPostError("Couldn't generate that \u2014 check connection and try again.");
     } finally {
@@ -1508,7 +1529,7 @@ function App() {
       const id = Date.now();
       review._id = id;
       setRvResult(review);
-      setSavedReviews((list) => [{ id, review }, ...list].slice(0, HISTORY_LIMIT));
+      setSavedReviews((list) => [{ id, savedAt: id, updatedAt: id, review }, ...list].slice(0, HISTORY_LIMIT));
     } catch (e) {
       setRvError("Couldn't review that — check connection and try again.");
     } finally {
@@ -1520,12 +1541,84 @@ function App() {
   const editReview = (patch) => {
     const next = { ...rvResult, ...patch };
     setRvResult(next);
-    if (next._id) setSavedReviews((list) => list.map((h) => (h.id === next._id ? { ...h, review: next } : h)));
+    if (next._id) setSavedReviews((list) => list.map((h) => (h.id === next._id ? { ...h, review: next, updatedAt: Date.now() } : h)));
   };
   const editReviewSection = (i, field, v) => {
     if (i === 0) editReview({ verdict: v });
     else editReview({ findings: rvResult.findings.map((f, j) => (j === i - 1 ? { ...f, [field]: v } : f)) });
   };
+
+  // Keep the post library in step with edits and revisions of the open post.
+  useEffect(() => {
+    if (!postResult || !postResult._id) return;
+    setSavedPosts((list) => list.map((x) => (x.id === postResult._id && x.result !== postResult ? { ...x, result: postResult, updatedAt: Date.now() } : x)));
+  }, [postResult]);
+
+  const deleteSavedPost = (id) => { setSavedPosts((list) => list.filter((x) => x.id !== id)); forget(id); };
+  const openSavedPost = (x) => {
+    setPostTask(x.task || "create");
+    if (x.niche) setPostNiche(x.niche);
+    setPostResult(x.result);
+    setPostError("");
+  };
+
+  // ---- Cloud sync for posts, weeks and reviews (Supabase via /api/memory?doc=content) ----
+  // Uses the same passcode as Memory. On connect, cloud and device copies are
+  // merged (nothing is dropped); after that every change is saved back.
+  const [contentReady, setContentReady] = useState(false);
+  const [contentStatus, setContentStatus] = useState("");
+  useEffect(() => {
+    if (!syncKey) { setContentReady(false); setContentStatus(""); return; }
+    let cancelled = false;
+    setContentStatus("loading");
+    fetch("/api/memory?doc=content", { headers: { "x-desk-key": syncKey } })
+      .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || `Sync failed (${r.status})`); return d; })
+      .then((d) => {
+        if (cancelled) return;
+        const c = d.data || {};
+        const gone = [...new Set([...(c.deletedIds || []), ...deletedIds])];
+        setDeletedIds(gone);
+        setSavedPosts((l) => mergeById(l, c.savedPosts, gone));
+        setSavedWeeks((l) => mergeById(l, c.savedWeeks, gone));
+        setSavedReviews((l) => mergeById(l, c.savedReviews, gone));
+        setContentReady(true);
+      })
+      .catch((e) => { if (!cancelled) { setContentReady(false); setContentStatus(e.message); } });
+    return () => { cancelled = true; };
+  }, [syncKey]);
+
+  useEffect(() => {
+    if (!syncKey || !contentReady) return;
+    setContentStatus("saving");
+    const t = setTimeout(() => {
+      fetch("/api/memory?doc=content", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-desk-key": syncKey },
+        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, deletedIds } }),
+      })
+        .then(async (r) => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Sync failed (${r.status})`); } setContentStatus("saved"); })
+        .catch((e) => setContentStatus(e.message));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [savedPosts, savedWeeks, savedReviews, deletedIds, contentReady]);
+
+  const cloudBanner = (
+    <div style={{ background: "#fff", border: `1px solid ${syncKey && contentStatus === "saved" ? SAFE : "#D8D0BC"}`, borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12.5, fontFamily: "'Courier New', monospace" }}>
+      {syncKey ? (
+        <span style={{ color: contentStatus === "saved" ? SAFE : contentStatus === "loading" || contentStatus === "saving" ? "#5A5142" : RISK }}>
+          {contentStatus === "loading" ? "Connecting to cloud..." : contentStatus === "saving" ? "Saving to cloud..." : contentStatus === "saved" ? "✓ Saved to cloud (Supabase) — your posts, weeks and reviews are on every device." : `Cloud save problem: ${contentStatus || "not connected yet"}`}
+        </span>
+      ) : (
+        <div>
+          <div style={{ color: RISK, marginBottom: 8 }}>Not saving to the cloud yet — posts are only in this browser. Enter your passcode to save everything to Supabase.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="password" value={syncKeyInput} onChange={(e) => setSyncKeyInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && syncKeyInput.trim() && (setSyncKey(syncKeyInput.trim()), setSyncKeyInput(""))} placeholder="Cloud passcode (same as Memory)" style={{ ...selectStyle, flex: 1, fontSize: 13 }} />
+            <button onClick={() => { if (syncKeyInput.trim()) { setSyncKey(syncKeyInput.trim()); setSyncKeyInput(""); } }} style={{ padding: "8px 14px", background: INK, color: PAPER, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 12 }}>Connect</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   const copyResumeReview = () => {
     if (!rvResult) return;
@@ -1966,6 +2059,25 @@ function App() {
                 Rewrite a proven post into your niche, or build a new one from a client win or photo.
               </p>
 
+              {cloudBanner}
+
+              {savedPosts.length > 0 && (
+                <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px", marginBottom: 12 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>My posts ({savedPosts.length})</summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, maxHeight: 320, overflowY: "auto" }}>
+                    {savedPosts.map((h) => (
+                      <div key={h.id} style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #EEE8DA", paddingTop: 6 }}>
+                        <button onClick={() => openSavedPost(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: postResult && postResult._id === h.id ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(h.savedAt)} &middot; {h.task === "caption" ? "Caption" : h.task === "rewrite" ? "Rewrite" : "Post"}</span>
+                          {((h.result && h.result.rewritten) || "").split("\n")[0].slice(0, 90)}
+                        </button>
+                        <button onClick={() => deleteSavedPost(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
               {savedWeeks.length > 0 && (
                 <details style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px", marginBottom: 18 }}>
                   <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Saved weeks ({savedWeeks.length})</summary>
@@ -2265,7 +2377,7 @@ function App() {
                               <EditableText aiNiche={postNiche} fontSize={13} value={wkPosts[i].post} onChange={(v) => {
                                 const r = { ...wkPosts[i], post: v };
                                 setWkPosts((p) => ({ ...p, [i]: r }));
-                                setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
+                                setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r }, updatedAt: Date.now() } : w)));
                               }} />
                             </div>
                             <div style={EDIT_HINT}>Click the text to edit, or highlight words for AI options &mdash; changes save automatically.</div>
@@ -2330,7 +2442,7 @@ function App() {
                         <button onClick={() => ((x) => setRvResult(x.review))(h)} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", color: INK, fontSize: 13, fontWeight: rvResult && (h.review === rvResult || h.id === rvResult._id) ? 700 : 400 }}>
                           <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: "#8A8272", marginRight: 8 }}>{formatSavedAt(h.id)}</span>{h.review.clientName} &middot; {h.review.industry}
                         </button>
-                        <button onClick={() => ((id) => setSavedReviews((list) => list.filter((r) => r.id !== id)))(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
+                        <button onClick={() => ((id) => { setSavedReviews((list) => list.filter((r) => r.id !== id)); forget(id); })(h.id)} title="Delete" style={{ background: "none", border: "none", color: "#8A8272", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>&times;</button>
                       </div>
                     ))}
                   </div>

@@ -5,8 +5,10 @@
 //   DESK_MEMORY_KEY            passcode you type once in the Memory tab
 // GET  /api/memory  -> { data, updated_at }
 // PUT  /api/memory  body { data } -> { updated_at }
+// Add ?doc=content for the saved posts, weekly plans and resume reviews,
+// stored as a second row (id "content") in the same table.
 
-const ROW_ID = "default";
+const ROWS = { memory: "default", content: "content" };
 
 export default async function handler(req, res) {
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DESK_MEMORY_KEY } = process.env;
@@ -16,6 +18,13 @@ export default async function handler(req, res) {
   }
   if (req.headers["x-desk-key"] !== DESK_MEMORY_KEY) {
     res.status(401).json({ error: "Wrong passcode." });
+    return;
+  }
+
+  const doc = (req.query && req.query.doc) || new URL(req.url, "http://x").searchParams.get("doc") || "memory";
+  const ROW_ID = ROWS[doc];
+  if (!ROW_ID) {
+    res.status(400).json({ error: "Unknown doc." });
     return;
   }
 
@@ -37,8 +46,11 @@ export default async function handler(req, res) {
     if (req.method === "PUT") {
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
       const data = body.data;
-      if (!data || typeof data !== "object" || !Array.isArray(data.notes) || typeof data.clients !== "object") {
-        res.status(400).json({ error: "Body must be { data: { notes: [], clients: {} } }." });
+      const valid = doc === "content"
+        ? data && typeof data === "object" && ["savedPosts", "savedWeeks", "savedReviews"].every((k) => Array.isArray(data[k]))
+        : data && typeof data === "object" && Array.isArray(data.notes) && typeof data.clients === "object";
+      if (!valid) {
+        res.status(400).json({ error: doc === "content" ? "Body must be { data: { savedPosts: [], savedWeeks: [], savedReviews: [] } }." : "Body must be { data: { notes: [], clients: {} } }." });
         return;
       }
       const updated_at = new Date().toISOString();
