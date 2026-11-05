@@ -21,27 +21,141 @@
 <script type="text/babel">
 const { useState, useMemo, useEffect, useRef } = React;
 
+// Quick actions offered when text is highlighted inside an editable field.
+const SELECTION_ACTIONS = [
+  { id: "rewrite", label: "Rewrite", ask: "Rewrite it in a fresh way with the same meaning." },
+  { id: "improve", label: "Improve", ask: "Improve it: clearer, stronger, more compelling, same meaning." },
+  { id: "shorter", label: "Shorter", ask: "Make it noticeably shorter without losing the point." },
+  { id: "longer", label: "Expand", ask: "Expand it with a little more detail or explanation, staying factual." },
+  { id: "punchier", label: "Punchier", ask: "Make it punchier and more direct, with short sentences." },
+  { id: "pro", label: "More professional", ask: "Make the tone more professional and polished." },
+  { id: "friendly", label: "Friendlier", ask: "Make the tone warmer and more conversational." },
+  { id: "hook", label: "Make it a hook", ask: "Turn it into a scroll-stopping opening hook of one or two short lines." },
+  { id: "bullets", label: "Bullet points", ask: "Turn it into a short list of bullet points, one per line, each starting with a fitting emoji or a dash." },
+  { id: "emoji", label: "Add emoji", ask: "Add one to three fitting emoji, without changing the words much." },
+  { id: "grammar", label: "Fix grammar", ask: "Fix spelling, grammar and punctuation only. Change nothing else." },
+];
+
+async function transformSelection({ selected, fullText, ask, kind, niche }) {
+  const prompt = `You are editing part of a ${kind}${niche ? ` for the niche "${niche}"` : ""}. The FULL TEXT is given only for context. Change ONLY the SELECTED PART as instructed, so it still fits smoothly where it sits in the full text. Never invent facts, numbers, names or client stories.
+
+INSTRUCTION: ${ask}
+
+FULL TEXT (context only):
+"""${fullText}"""
+
+SELECTED PART:
+"""${selected}"""
+
+Respond with ONLY the replacement for the selected part: no quotes, no preamble, no notes, no markdown.`;
+  const out = await callClaudeText([{ type: "text", text: prompt }], { model: "claude-haiku-4-5-20251001", max_tokens: 1200 });
+  if (!out) throw new Error("The AI returned nothing.");
+  return out.replace(/^"""|"""$/g, "");
+}
+
 // A textarea that grows with its content, so generated text can be edited in
-// place and still reads like the page around it.
-function EditableText({ value, onChange, fontSize = 14 }) {
+// place and still reads like the page around it. Highlighting text inside it
+// opens a menu of AI actions that rewrite just the highlighted part.
+function EditableText({ value, onChange, fontSize = 14, aiKind = "LinkedIn post", aiNiche = "" }) {
   const ref = useRef(null);
+  const menuRef = useRef(null);
+  const [sel, setSel] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [custom, setCustom] = useState("");
+  const [undo, setUndo] = useState(null);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }, [value]);
+
+  const readSelection = () => {
+    const el = ref.current;
+    if (!el) return;
+    const { selectionStart: a, selectionEnd: b } = el;
+    if (b > a && el.value.slice(a, b).trim()) { setSel({ a, b }); setErr(""); }
+    else if (!busy) setSel(null);
+  };
+
+  const apply = async (id, ask) => {
+    if (!sel || busy) return;
+    const text = value || "";
+    const selected = text.slice(sel.a, sel.b);
+    setBusy(id);
+    setErr("");
+    try {
+      const out = await transformSelection({ selected, fullText: text, ask, kind: aiKind, niche: aiNiche });
+      setUndo(text);
+      onChange(text.slice(0, sel.a) + out + text.slice(sel.b));
+      setSel(null);
+      setCustom("");
+    } catch (e) {
+      setErr(`Couldn't do that (${e.message}).`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Clicking the menu must not take focus (and the highlight) from the text.
+  const keep = (e) => { if (e.target.tagName !== "INPUT") e.preventDefault(); };
+  const chip = (active) => ({
+    padding: "5px 10px", borderRadius: 14, border: `1px solid ${active ? BRASS : "#D8D0BC"}`, background: active ? BRASS : "#fff",
+    color: active ? PAPER : INK, fontFamily: "'Courier New', monospace", fontSize: 11.5, cursor: busy ? "default" : "pointer", whiteSpace: "nowrap",
+  });
+
   return (
-    <textarea
-      ref={ref}
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-      spellCheck
-      style={{
-        width: "100%", border: "none", outline: "none", resize: "none", overflow: "hidden",
-        background: "transparent", color: INK, fontFamily: "inherit", fontSize, lineHeight: 1.6, padding: 0, display: "block",
-      }}
-    />
+    <div>
+      {sel && (
+        <div ref={menuRef} onMouseDown={keep} style={{ background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 8, padding: 8, marginBottom: 8, fontFamily: "'Courier New', monospace" }}>
+          <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 6 }}>
+            {busy ? "Working on the highlighted text..." : `Highlighted ${(value || "").slice(sel.a, sel.b).trim().split(/\s+/).length} word(s) — choose what to do:`}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {SELECTION_ACTIONS.map((x) => (
+              <button key={x.id} onMouseDown={keep} onClick={() => apply(x.id, x.ask)} disabled={!!busy} style={chip(busy === x.id)}>
+                {busy === x.id ? "..." : x.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <input
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && custom.trim()) apply("custom", custom.trim()); }}
+              onBlur={(e) => { if (!busy && e.relatedTarget !== ref.current && !(menuRef.current && menuRef.current.contains(e.relatedTarget))) setSel(null); }}
+              placeholder="Or tell the AI what to do with it..."
+              style={{ flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 6, border: "1px solid #D8D0BC", fontSize: 12, background: "#fff", color: INK }}
+            />
+            <button onClick={() => custom.trim() && apply("custom", custom.trim())} disabled={!!busy || !custom.trim()} style={chip(busy === "custom")}>
+              {busy === "custom" ? "..." : "Apply"}
+            </button>
+          </div>
+          {err && <div style={{ color: RISK, fontSize: 11.5, marginTop: 6 }}>{err}</div>}
+        </div>
+      )}
+      <textarea
+        ref={ref}
+        value={value || ""}
+        onChange={(e) => { onChange(e.target.value); setUndo(null); }}
+        onSelect={readSelection}
+        onMouseUp={readSelection}
+        onKeyUp={readSelection}
+        onBlur={(e) => { if (!busy && !(menuRef.current && menuRef.current.contains(e.relatedTarget))) setSel(null); }}
+        spellCheck
+        style={{
+          width: "100%", border: "none", outline: "none", resize: "none", overflow: "hidden",
+          background: "transparent", color: INK, fontFamily: "inherit", fontSize, lineHeight: 1.6, padding: 0, display: "block",
+        }}
+      />
+      {undo !== null && (
+        <button onClick={() => { onChange(undo); setUndo(null); }} style={{ marginTop: 6, background: "none", border: "none", padding: 0, color: BRASS, fontFamily: "'Courier New', monospace", fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }}>
+          Undo AI change
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -2017,7 +2131,7 @@ function App() {
                       <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>
                         {postTask === "rewrite" ? "REWRITTEN POST" : postTask === "caption" ? "CAPTION \u2014 OPTION 1" : "NEW POST"} &middot; CLICK TO EDIT
                       </div>
-                      <EditableText value={postResult.rewritten} onChange={(v) => setPostResult({ ...postResult, rewritten: v })} />
+                      <EditableText aiNiche={postNiche} aiKind={postTask === "caption" ? "LinkedIn caption" : "LinkedIn post"} value={postResult.rewritten} onChange={(v) => setPostResult({ ...postResult, rewritten: v })} />
                     </div>
                     <button onClick={copyPostResult} style={{
                       marginTop: 12, padding: "9px 16px", background: postCopied ? SAFE : INK, color: PAPER, border: "none",
@@ -2047,7 +2161,7 @@ function App() {
                     <div key={k} style={{ marginTop: 14 }}>
                       <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
                         <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>CAPTION &mdash; OPTION {k + 2} &middot; CLICK TO EDIT</div>
-                        <EditableText value={alt} onChange={(v) => setPostResult({ ...postResult, alternatives: postResult.alternatives.map((a, j) => (j === k ? v : a)) })} />
+                        <EditableText aiNiche={postNiche} aiKind="LinkedIn caption" value={alt} onChange={(v) => setPostResult({ ...postResult, alternatives: postResult.alternatives.map((a, j) => (j === k ? v : a)) })} />
                       </div>
                       <button onClick={() => { copyText(alt); setPostCopiedAlt(k); setTimeout(() => setPostCopiedAlt(null), 1600); }} style={{
                         marginTop: 8, padding: "7px 14px", background: postCopiedAlt === k ? SAFE : INK, color: PAPER, border: "none",
@@ -2114,13 +2228,13 @@ function App() {
                         {wkPosts[i] && (
                           <div style={{ marginTop: 12 }}>
                             <div style={{ background: "#FBF9F4", border: "1px solid #E5DFD0", borderRadius: 6, padding: "12px 14px" }}>
-                              <EditableText fontSize={13} value={wkPosts[i].post} onChange={(v) => {
+                              <EditableText aiNiche={postNiche} fontSize={13} value={wkPosts[i].post} onChange={(v) => {
                                 const r = { ...wkPosts[i], post: v };
                                 setWkPosts((p) => ({ ...p, [i]: r }));
                                 setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
                               }} />
                             </div>
-                            <div style={EDIT_HINT}>Click the text to edit &mdash; changes save automatically.</div>
+                            <div style={EDIT_HINT}>Click the text to edit, or highlight words for AI options &mdash; changes save automatically.</div>
                             <button onClick={() => copyWk(`post${i}`, wkPosts[i].post)} style={{
                               marginTop: 8, padding: "6px 12px", background: wkCopied === `post${i}` ? SAFE : "transparent", color: wkCopied === `post${i}` ? PAPER : INK,
                               border: `1px solid ${wkCopied === `post${i}` ? SAFE : INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
@@ -2239,8 +2353,8 @@ function App() {
                     <div style={{ textAlign: "center", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>{rvResult.industry} RESUME REVIEW</div>
                     <div style={{ marginTop: 14, fontSize: 13 }}><b>For:</b> {rvResult.clientName}</div>
                     <div style={{ marginBottom: 12, fontSize: 13 }}><b>Prepared By:</b> Resume Reviewer</div>
-                    <div style={{ ...EDIT_HINT, marginTop: 0, marginBottom: 8 }}>Click any text to edit &mdash; the PDF and copy use your edits.</div>
-                    <div style={{ margin: "0 0 6px" }}><EditableText value={rvResult.intro} onChange={(v) => editReview({ intro: v })} /></div>
+                    <div style={{ ...EDIT_HINT, marginTop: 0, marginBottom: 8 }}>Click any text to edit, or highlight words for AI options &mdash; the PDF and copy use your edits.</div>
+                    <div style={{ margin: "0 0 6px" }}><EditableText aiKind="client resume review" aiNiche={rvResult.industry} value={rvResult.intro} onChange={(v) => editReview({ intro: v })} /></div>
                     {resumeReviewSections(rvResult).map((s, i) => (
                       <div key={i}>
                         <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4, display: "flex", gap: 4 }}>
@@ -2249,13 +2363,13 @@ function App() {
                             <input value={s.headline} onChange={(e) => editReviewSection(i, "headline", e.target.value)} style={{ flex: 1, border: "none", outline: "none", background: "transparent", font: "inherit", color: INK, padding: 0 }} />
                           )}
                         </div>
-                        <EditableText value={s.body} onChange={(v) => editReviewSection(i, "body", v)} />
+                        <EditableText aiKind="client resume review" aiNiche={rvResult.industry} value={s.body} onChange={(v) => editReviewSection(i, "body", v)} />
                       </div>
                     ))}
                     <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>FINAL DIAGNOSIS</div>
-                    <EditableText value={rvResult.diagnosis} onChange={(v) => editReview({ diagnosis: v })} />
+                    <EditableText aiKind="client resume review" aiNiche={rvResult.industry} value={rvResult.diagnosis} onChange={(v) => editReview({ diagnosis: v })} />
                     <div style={{ fontWeight: 700, marginTop: 16, marginBottom: 4 }}>BOTTOM LINE</div>
-                    <EditableText value={rvResult.bottomLine} onChange={(v) => editReview({ bottomLine: v })} />
+                    <EditableText aiKind="client resume review" aiNiche={rvResult.industry} value={rvResult.bottomLine} onChange={(v) => editReview({ bottomLine: v })} />
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
                     <button onClick={copyResumeReview} style={{
