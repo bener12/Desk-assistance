@@ -21,6 +21,29 @@
 <script type="text/babel">
 const { useState, useMemo, useEffect, useRef } = React;
 
+// House writing style for every post and caption: no dash-heavy punctuation
+// and no divider lines, which read as AI-generated on LinkedIn.
+const POST_STYLE = `WRITING STYLE (strict):
+- Do NOT use em dashes (—) or en dashes (–), and do not use a hyphen as punctuation between clauses. Use a comma, a period, or a new sentence instead.
+- Do NOT add divider or separator lines (---, ___, ———, ━━━, ═══ or similar).
+- Do NOT start lines with a dash or hyphen as a bullet. If a list is needed, use numbers or a fitting emoji.
+- Hyphens are only allowed inside normal compound words (e.g. "follow-up", "full-time").`;
+
+// Safety net after generation: turns stray dash punctuation into commas and
+// drops divider lines and dash bullets the model added anyway.
+function cleanPostText(text) {
+  return String(text || "")
+    .split("\n")
+    .filter((line) => !/^\s*([-_=~*\u2014\u2013\u2500-\u257F]\s*){3,}$/.test(line))
+    .map((line) => line.replace(/^(\s*)[-\u2013\u2014]\s+/, "$1"))
+    .join("\n")
+    .replace(/\s*[\u2014\u2013]\s*/g, ", ")
+    .replace(/ +- +/g, ", ")
+    .replace(/,\s*([.,!?;:])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // Quick actions offered when text is highlighted inside an editable field.
 const SELECTION_ACTIONS = [
   { id: "rewrite", label: "Rewrite", ask: "Rewrite it in a fresh way with the same meaning." },
@@ -31,7 +54,7 @@ const SELECTION_ACTIONS = [
   { id: "pro", label: "More professional", ask: "Make the tone more professional and polished." },
   { id: "friendly", label: "Friendlier", ask: "Make the tone warmer and more conversational." },
   { id: "hook", label: "Make it a hook", ask: "Turn it into a scroll-stopping opening hook of one or two short lines." },
-  { id: "bullets", label: "Bullet points", ask: "Turn it into a short list of bullet points, one per line, each starting with a fitting emoji or a dash." },
+  { id: "bullets", label: "Bullet points", ask: "Turn it into a short list of bullet points, one per line, each starting with a fitting emoji." },
   { id: "emoji", label: "Add emoji", ask: "Add one to three fitting emoji, without changing the words much." },
   { id: "grammar", label: "Fix grammar", ask: "Fix spelling, grammar and punctuation only. Change nothing else." },
 ];
@@ -47,10 +70,13 @@ FULL TEXT (context only):
 SELECTED PART:
 """${selected}"""
 
+${/LinkedIn/.test(kind) ? POST_STYLE : "Do not use em dashes (\u2014) or en dashes (\u2013); use commas or periods instead."}
+
 Respond with ONLY the replacement for the selected part: no quotes, no preamble, no notes, no markdown.`;
   const out = await callClaudeText([{ type: "text", text: prompt }], { model: "claude-haiku-4-5-20251001", max_tokens: 1200 });
   if (!out) throw new Error("The AI returned nothing.");
-  return out.replace(/^"""|"""$/g, "");
+  const clean = out.replace(/^"""|"""$/g, "");
+  return /LinkedIn/.test(kind) ? cleanPostText(clean) : clean.replace(/\s*[\u2014\u2013]\s*/g, ", ");
 }
 
 // A textarea that grows with its content, so generated text can be edited in
@@ -705,7 +731,11 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in this exact sha
     content.push({ type: "text", text: instructions + `\n\n${label}:\n"""${sourceText}"""` });
   }
 
-  return callClaudeJSON(content, { model: "claude-haiku-4-5-20251001", max_tokens: task === "caption" ? 1500 : 1000 });
+  content[content.length - 1].text += `\n\n${POST_STYLE}\nThese style rules apply to every post or caption you write inside the JSON.`;
+  const result = await callClaudeJSON(content, { model: "claude-haiku-4-5-20251001", max_tokens: task === "caption" ? 1500 : 1000 });
+  result.rewritten = cleanPostText(result.rewritten);
+  if (Array.isArray(result.alternatives)) result.alternatives = result.alternatives.map(cleanPostText);
+  return result;
 }
 
 // Benchmark of what a strong resume looks like (house style). The reviewer
@@ -889,10 +919,12 @@ USER'S DIRECTION:
 CURRENT ${kind.toUpperCase()}:
 """${text}"""
 
+${POST_STYLE}
+
 Respond with ONLY the revised ${kind} text, ready to paste: no preamble, no notes, no markdown.`;
   const out = await callClaudeText([{ type: "text", text: prompt }], { max_tokens: 1800 });
   if (!out) throw new Error("The AI returned an empty revision.");
-  return out;
+  return cleanPostText(out);
 }
 
 async function generateDayPost({ niche, keywords, theme, day, anchorPost, direction }) {
@@ -911,10 +943,12 @@ ${keywords ? `Naturally weave in these keywords: ${keywords}.` : ""}
 ${direction ? `The user's own direction for this post (follow it; it overrides the brief where they conflict):\n"""${direction}"""` : ""}
 Write in a human, first-person voice with short paragraphs and line breaks suited to LinkedIn. No hashtag spam (max 3 at the end).
 
+${POST_STYLE}
+
 Respond with ONLY the post text itself, ready to paste into LinkedIn: no title, no preamble, no notes, no markdown.`;
   const post = await callClaudeText([{ type: "text", text }], { max_tokens: 1800 });
   if (!post) throw new Error("The AI returned an empty post.");
-  return { post };
+  return { post: cleanPostText(post) };
 }
 
 function weeklyPlanToText(plan, posts) {
