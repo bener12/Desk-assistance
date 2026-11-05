@@ -737,7 +737,25 @@ Respond ONLY with valid JSON, no markdown fences, in this exact shape:
   return callClaudeJSON([{ type: "text", text }], { max_tokens: 2000 });
 }
 
-async function generateDayPost({ niche, keywords, theme, day, anchorPost }) {
+// Revises an existing post or caption following the user's own direction,
+// keeping what they didn't ask to change.
+async function reviseWithDirection({ text, direction, niche, keywords, kind = "LinkedIn post" }) {
+  const prompt = `You are a LinkedIn ghostwriter for a professional in the niche "${niche}". Revise the ${kind} below following the user's direction exactly. Keep everything they did not ask to change (voice, structure, call to action, hashtags) unless the direction says otherwise. Never invent facts, numbers, or client stories that aren't in the original or the direction.
+${keywords ? `Keep these keywords natural where they fit: ${keywords}.` : ""}
+
+USER'S DIRECTION:
+"""${direction}"""
+
+CURRENT ${kind.toUpperCase()}:
+"""${text}"""
+
+Respond with ONLY the revised ${kind} text, ready to paste: no preamble, no notes, no markdown.`;
+  const out = await callClaudeText([{ type: "text", text: prompt }], { max_tokens: 1800 });
+  if (!out) throw new Error("The AI returned an empty revision.");
+  return out;
+}
+
+async function generateDayPost({ niche, keywords, theme, day, anchorPost, direction }) {
   const isMonday = day.day === "Monday";
   const text = `You are a LinkedIn ghostwriter for a solo service provider in the niche "${niche}". Write ${day.day}'s post in a weekly series on the theme "${theme}".
 
@@ -750,6 +768,7 @@ Day brief:
 - End with this call to action (or a close variant): ${day.cta}
 ${isMonday ? `\nThis is the anchor post that opens the week. Base it closely on the ANCHOR POST below, tightened to fit the brief:\n"""${anchorPost}"""` : ""}
 ${keywords ? `Naturally weave in these keywords: ${keywords}.` : ""}
+${direction ? `The user's own direction for this post (follow it; it overrides the brief where they conflict):\n"""${direction}"""` : ""}
 Write in a human, first-person voice with short paragraphs and line breaks suited to LinkedIn. No hashtag spam (max 3 at the end).
 
 Respond with ONLY the post text itself, ready to paste into LinkedIn: no title, no preamble, no notes, no markdown.`;
@@ -874,11 +893,12 @@ function App() {
   const [wkError, setWkError] = useState("");
   const [wkPosts, setWkPosts] = usePersisted("wkPosts", {});
   const [wkBusy, setWkBusy] = useState({});
+  const [wkNotes, setWkNotes] = useState({});
   const [wkId, setWkId] = usePersisted("wkId", null);
   const [savedWeeks, setSavedWeeks] = usePersisted("savedWeeks", []);
   const [wkCopied, setWkCopied] = useState(null);
 
-  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkId(null); setWkBusy({}); setWkError(""); };
+  const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkNotes({}); setWkId(null); setWkBusy({}); setWkError(""); };
 
   const runWeeklyStrategy = async () => {
     if (!postResult) return;
@@ -908,11 +928,29 @@ function App() {
     setWkBusy((b) => ({ ...b, [i]: "post" }));
     setWkError("");
     try {
-      const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: weekAnchorText() });
+      const r = await generateDayPost({ niche: postNiche, keywords: postKeywords, theme: wkPlan.theme, day: wkPlan.days[i], anchorPost: weekAnchorText(), direction: (wkNotes[i] || "").trim() });
       setWkPosts((p) => ({ ...p, [i]: r }));
       setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
     } catch (e) {
       setWkError(`Couldn't write ${wkPlan.days[i].day}'s post (${e.message}) — try again.`);
+    } finally {
+      setWkBusy((b) => ({ ...b, [i]: null }));
+    }
+  };
+
+  const reviseDayPost = async (i) => {
+    const direction = (wkNotes[i] || "").trim();
+    if (!direction) { setWkError(`Type what to change in ${wkPlan.days[i].day}'s post first.`); return; }
+    setWkBusy((b) => ({ ...b, [i]: "revise" }));
+    setWkError("");
+    try {
+      const post = await reviseWithDirection({ text: wkPosts[i].post, direction, niche: postNiche, keywords: postKeywords });
+      const r = { ...wkPosts[i], post };
+      setWkPosts((p) => ({ ...p, [i]: r }));
+      setSavedWeeks((list) => list.map((w) => (w.id === wkId ? { ...w, posts: { ...w.posts, [i]: r } } : w)));
+      setWkNotes((n) => ({ ...n, [i]: "" }));
+    } catch (e) {
+      setWkError(`Couldn't revise ${wkPlan.days[i].day}'s post (${e.message}) \u2014 try again.`);
     } finally {
       setWkBusy((b) => ({ ...b, [i]: null }));
     }
@@ -996,6 +1034,24 @@ function App() {
       setPostError("Couldn't generate that \u2014 check connection and try again.");
     } finally {
       setPostLoading(false);
+    }
+  };
+
+  const [postDirection, setPostDirection] = useState("");
+  const [postRevising, setPostRevising] = useState(false);
+
+  const revisePostResult = async () => {
+    if (!postResult || !postDirection.trim()) { setPostError("Tell the AI what to change first."); return; }
+    setPostError("");
+    setPostRevising(true);
+    try {
+      const text = await reviseWithDirection({ text: postResult.rewritten, direction: postDirection, niche: postNiche, keywords: postKeywords, kind: postTask === "caption" ? "LinkedIn caption" : "LinkedIn post" });
+      setPostResult({ ...postResult, rewritten: text });
+      setPostDirection("");
+    } catch (e) {
+      setPostError(`Couldn't revise that (${e.message}) \u2014 try again.`);
+    } finally {
+      setPostRevising(false);
     }
   };
 
@@ -1932,6 +1988,20 @@ function App() {
                       marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
+
+                    <div style={{ marginTop: 14 }}>
+                      <label style={labelStyle}>{postTask === "caption" ? "TELL THE AI HOW TO CHANGE OPTION 1" : "TELL THE AI HOW TO CHANGE THIS POST"}</label>
+                      <textarea
+                        value={postDirection}
+                        onChange={(e) => setPostDirection(e.target.value)}
+                        placeholder="e.g. Make it shorter and punchier, add a line about tailoring for each job, end with a question, less formal..."
+                        style={{ ...selectStyle, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
+                      />
+                      <button onClick={revisePostResult} disabled={postRevising || postLoading} style={{
+                        marginTop: 8, padding: "9px 16px", background: BRASS, color: PAPER, border: "none", borderRadius: 6,
+                        fontFamily: "'Courier New', monospace", fontSize: 13, cursor: postRevising ? "default" : "pointer", opacity: postRevising ? 0.6 : 1,
+                      }}>{postRevising ? "Revising..." : "Revise with my direction"}</button>
+                    </div>
                   </div>
 
                   {(postResult.alternatives || []).map((alt, k) => (
@@ -1983,7 +2053,19 @@ function App() {
                         <div style={{ fontSize: 13, color: "#5A5142", marginTop: 4 }}><b>Goal:</b> {d.goal}</div>
                         <div style={{ fontSize: 12, fontFamily: "'Courier New', monospace", color: "#8A8272", marginTop: 6 }}>{d.format} &middot; CTA: &ldquo;{d.cta}&rdquo;</div>
 
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        <textarea
+                          value={wkNotes[i] || ""}
+                          onChange={(e) => setWkNotes((n) => ({ ...n, [i]: e.target.value }))}
+                          placeholder={wkPosts[i] ? "How should this post change? e.g. add a client example, shorter, warmer tone..." : "Your direction for this post (optional) \u2014 e.g. mention our free resume check, keep it under 150 words..."}
+                          style={{ ...selectStyle, minHeight: 56, fontFamily: "inherit", resize: "vertical", marginTop: 10, fontSize: 13 }}
+                        />
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                          {wkPosts[i] && (
+                            <button onClick={() => reviseDayPost(i)} disabled={!!wkBusy[i]} style={{
+                              padding: "7px 12px", background: BRASS, color: PAPER, border: "none", borderRadius: 6,
+                              fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
+                            }}>{wkBusy[i] === "revise" ? "Revising..." : "Revise with my direction"}</button>
+                          )}
                           <button onClick={() => writeDayPost(i)} disabled={!!wkBusy[i]} style={{
                             padding: "7px 12px", background: INK, color: PAPER, border: "none", borderRadius: 6,
                             fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer", opacity: wkBusy[i] ? 0.6 : 1,
