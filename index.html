@@ -14,6 +14,16 @@
   body { overflow-x: hidden; }
   * { box-sizing: border-box; }
   img { max-width: 100%; }
+  /* Scale the whole app up on large screens so text isn't tiny. */
+  @media (min-width: 1500px) { #root { zoom: 1.12; } }
+  @media (min-width: 1900px) { #root { zoom: 1.25; } }
+  /* Document checker: document and suggestions side by side. */
+  .doc-split { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr); gap: 18px; align-items: start; }
+  .doc-side { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  @media (max-width: 900px) {
+    .doc-split { grid-template-columns: 1fr; }
+    .doc-side { position: static; max-height: none; }
+  }
 </style>
 </head>
 <body>
@@ -1596,6 +1606,24 @@ function App() {
   const [docCopied, setDocCopied] = useState(false);
   const docEditStart = useRef(null);
 
+  // Keep the document and the suggestion list pointing at the same issue:
+  // selecting either one scrolls the other into view.
+  useEffect(() => {
+    if (!docActive) return;
+    const t = setTimeout(() => {
+      const hl = document.querySelector(`[data-hl="${docActive}"]`);
+      const card = document.querySelector(`[data-card="${docActive}"]`);
+      if (hl) hl.scrollIntoView({ block: "center", behavior: "smooth" });
+      // Scroll the side panel itself, so it doesn't cancel the page scroll above.
+      const side = card && card.closest(".doc-side");
+      if (side && getComputedStyle(side).position === "sticky") {
+        const top = card.offsetTop - side.clientHeight / 3;
+        side.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      }
+    }, 30);
+    return () => clearTimeout(t);
+  }, [docActive]);
+
   const logDoc = (entry) => setDocLog((l) => [{ id: Date.now() + Math.random(), at: Date.now(), ...entry }, ...l].slice(0, 300));
 
   const loadDocFile = (file) => {
@@ -1868,7 +1896,7 @@ function App() {
 
   return (
     <div style={{ background: INK, minHeight: "100vh", fontFamily: "Georgia, 'Iowan Old Style', serif" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: "40px 20px 80px" }}>
+      <div style={{ maxWidth: tab === "grammar" ? 1480 : 1080, margin: "0 auto", padding: "40px 20px 80px", transition: "max-width 0.2s" }}>
         <header style={{ borderBottom: `2px solid ${BRASS}`, paddingBottom: 20, marginBottom: 28 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <h1 style={{ color: PAPER, fontSize: 28, margin: 0, letterSpacing: 0.3 }}>Lead Desk</h1>
@@ -2758,8 +2786,8 @@ function App() {
                 </div>
               )}
 
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start" }}>
-                <div style={{ flex: "3 1 380px", minWidth: 0, background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6 }}>
+              <div className="doc-split">
+                <div style={{ minWidth: 0, background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6 }}>
                   <div style={{ display: "flex", gap: 6, padding: "10px 12px", borderBottom: "1px solid #EEE8DA", alignItems: "center", flexWrap: "wrap" }}>
                     <button onClick={() => switchDocView("review")} style={chipBtn(docView === "review")}>Tracked changes</button>
                     <button onClick={() => switchDocView("edit")} style={chipBtn(docView === "edit")}>Edit text</button>
@@ -2767,17 +2795,17 @@ function App() {
                       {docView === "review" ? "Click a highlight to fix it" : "Type freely · highlight words for AI options"}
                     </span>
                   </div>
-                  <div style={{ padding: "16px 18px", fontSize: 14.5, lineHeight: 1.75, color: INK, minHeight: 220 }}>
+                  <div style={{ padding: "22px 26px", fontSize: 16, lineHeight: 1.8, color: INK, minHeight: 320 }}>
                     {docView === "edit" || !docText ? (
                       docText || docView === "edit" ? (
-                        <EditableText aiKind={`${docType} (document)`} value={docText} onChange={setDocText} fontSize={14.5} />
+                        <EditableText aiKind={`${docType} (document)`} value={docText} onChange={setDocText} fontSize={16} />
                       ) : (
-                        <textarea value={docText} onChange={(e) => setDocText(e.target.value)} placeholder="Paste or type your document here..." style={{ width: "100%", minHeight: 220, border: "none", outline: "none", resize: "vertical", fontFamily: "inherit", fontSize: 14.5, color: INK, background: "transparent" }} />
+                        <textarea value={docText} onChange={(e) => setDocText(e.target.value)} placeholder="Paste or type your document here..." style={{ width: "100%", minHeight: 320, border: "none", outline: "none", resize: "vertical", fontFamily: "inherit", fontSize: 16, color: INK, background: "transparent" }} />
                       )
                     ) : (
                       <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                         {segs.map((g, k) => g.issue ? (
-                          <span key={k} onClick={() => setDocActive(g.issue.id)} title={`${DOC_ISSUE_TYPES[g.issue.type].label}: ${g.issue.why || ""}`} style={{
+                          <span key={k} data-hl={g.issue.id} onClick={() => setDocActive(g.issue.id)} title={`${DOC_ISSUE_TYPES[g.issue.type].label}: ${g.issue.why || ""}`} style={{
                             cursor: "pointer", borderBottom: `2px solid ${DOC_ISSUE_TYPES[g.issue.type].color}`,
                             background: docActive === g.issue.id ? "#F3E3B8" : "rgba(156,122,50,0.10)", borderRadius: 2,
                             opacity: docFilter === "all" || docFilter === g.issue.type ? 1 : 0.5,
@@ -2795,7 +2823,7 @@ function App() {
                   </div>
                 </div>
 
-                <div style={{ flex: "2 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="doc-side">
                   <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "12px 14px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>Suggestions ({pending.length})</div>
@@ -2809,9 +2837,9 @@ function App() {
                     )}
                     {!docReport && <div style={{ fontSize: 12.5, color: "#8A8272" }}>Add your document and goal, then click Check document.</div>}
                     {docReport && pending.length === 0 && <div style={{ fontSize: 12.5, color: SAFE }}>No open suggestions. Re-check after big edits.</div>}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 560, overflowY: "auto" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       {shown.map((x) => (
-                        <div key={x.id} onClick={() => setDocActive(x.id)} style={{ border: `1px solid ${docActive === x.id ? BRASS : "#EEE8DA"}`, borderLeft: `4px solid ${DOC_ISSUE_TYPES[x.type].color}`, borderRadius: 6, padding: "8px 10px", cursor: "pointer", background: docActive === x.id ? "#FBF6E9" : "#fff" }}>
+                        <div key={x.id} data-card={x.id} onClick={() => setDocActive(x.id)} style={{ border: `1px solid ${docActive === x.id ? BRASS : "#EEE8DA"}`, borderLeft: `4px solid ${DOC_ISSUE_TYPES[x.type].color}`, borderRadius: 6, padding: "8px 10px", cursor: "pointer", background: docActive === x.id ? "#FBF6E9" : "#fff" }}>
                           <div style={{ fontSize: 10.5, fontFamily: "'Courier New', monospace", color: DOC_ISSUE_TYPES[x.type].color, letterSpacing: 0.5, marginBottom: 4 }}>{DOC_ISSUE_TYPES[x.type].label.toUpperCase()}</div>
                           <div style={{ fontSize: 13, lineHeight: 1.5 }}>
                             <span style={{ textDecoration: "line-through", color: RISK }}>{x.original}</span>{" → "}
