@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   body { overflow-x: hidden; }
@@ -1023,6 +1024,278 @@ function downloadWeeklyPlanPdf(plan, posts) {
   doc.save(`weekly_content_strategy_${plan.theme.toLowerCase().replace(/[^\w]+/g, "_").slice(0, 40)}.pdf`);
 }
 
+// ---- Word (.docx) round trip ------------------------------------------------
+// The original .docx is kept and corrections are written back into its own
+// text runs, so fonts, sizes, styles, tables, headers and images survive.
+const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function bytesToB64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+const wEl = (doc, name) => doc.createElementNS(W_NS, "w:" + name);
+const isW = (n, name) => n && n.nodeType === 1 && n.namespaceURI === W_NS && n.localName === name;
+const closestW = (n, name, stop) => { for (let x = n.parentNode; x && x !== stop; x = x.parentNode) if (isW(x, name)) return x; return null; };
+const insideFallback = (n) => { for (let x = n.parentNode; x; x = x.parentNode) if (x.nodeType === 1 && x.localName === "Fallback") return true; return false; };
+
+// Body paragraphs in reading order (tables included; drawing fallbacks skipped).
+function docxParagraphs(xml) {
+  const body = xml.getElementsByTagNameNS(W_NS, "body")[0];
+  return Array.from(body.getElementsByTagNameNS(W_NS, "p")).filter((p) => !insideFallback(p));
+}
+
+// Text-bearing pieces of a paragraph, each with its offsets in the paragraph text.
+function paragraphItems(p) {
+  const items = [];
+  let pos = 0;
+  Array.from(p.getElementsByTagNameNS(W_NS, "r")).forEach((r) => {
+    if (closestW(r, "p") !== p || closestW(r, "del", p) || insideFallback(r)) return;
+    Array.from(r.childNodes).forEach((c) => {
+      let text = null;
+      if (isW(c, "t")) text = c.textContent;
+      else if (isW(c, "tab")) text = "\t";
+      else if (isW(c, "br") || isW(c, "cr")) text = "\n";
+      if (text === null) return;
+      items.push({ node: c, run: r, text, start: pos, end: pos + text.length });
+      pos += text.length;
+    });
+  });
+  return items;
+}
+const paragraphText = (p) => paragraphItems(p).map((x) => x.text).join("");
+
+async function readDocx(b64) {
+  const zip = await window.JSZip.loadAsync(b64ToBytes(b64));
+  const xmlText = await zip.file("word/document.xml").async("string");
+  const xml = new DOMParser().parseFromString(xmlText, "application/xml");
+  return { zip, xml, paras: docxParagraphs(xml) };
+}
+
+async function docxToText(b64) {
+  const { paras } = await readDocx(b64);
+  return paras.map(paragraphText).join("\n\n");
+}
+
+// Myers diff over word / space / punctuation tokens -> edits on the original text.
+function diffEdits(a, b) {
+  if (a === b) return [];
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  // Snap the trimmed window to token boundaries so words aren't split.
+  const isWord = (c) => c && /[\p{L}\p{N}'’]/u.test(c);
+  while (pre > 0 && isWord(a[pre - 1]) && (isWord(a[pre]) || isWord(b[pre]))) pre--;
+  while (suf > 0 && isWord(a[a.length - suf]) && (isWord(a[a.length - suf - 1]) || isWord(b[b.length - suf - 1]))) suf--;
+  const A = a.slice(pre, a.length - suf), B = b.slice(pre, b.length - suf);
+  const tok = (s) => s.match(/\s+|[\p{L}\p{N}'’]+|[^\s\p{L}\p{N}]/gu) || [];
+  const x = tok(A), y = tok(B);
+  const n = x.length, m = y.length, max = n + m, off = max;
+  const v = new Int32Array(2 * max + 2);
+  const trace = [];
+  let found = false;
+  for (let d = 0; d <= max && !found; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let i = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let j = i - k;
+      while (i < n && j < m && x[i] === y[j]) { i++; j++; }
+      v[off + k] = i;
+      if (i >= n && j >= m) { found = true; break; }
+    }
+  }
+  // Walk back through the trace to list token operations.
+  const ops = [];
+  let i = n, j = m;
+  for (let d = trace.length - 1; d > 0; d--) {
+    const vv = trace[d], k = i - j;
+    const prevK = k === -d || (k !== d && vv[off + k - 1] < vv[off + k + 1]) ? k + 1 : k - 1;
+    const pi = vv[off + prevK], pj = pi - prevK;
+    while (i > pi && j > pj) { ops.push(["=", x[i - 1]]); i--; j--; }
+    if (i === pi) ops.push(["+", y[j - 1]]); else ops.push(["-", x[i - 1]]);
+    i = pi; j = pj;
+  }
+  while (i > 0 && j > 0) { ops.push(["=", x[i - 1]]); i--; j--; }
+  ops.reverse();
+  const edits = [];
+  let pos = pre, cur = null;
+  ops.forEach(([op, t]) => {
+    if (op === "=") { if (cur) { edits.push(cur); cur = null; } pos += t.length; return; }
+    if (!cur) cur = { start: pos, end: pos, text: "" };
+    if (op === "-") { cur.end += t.length; pos += t.length; } else cur.text += t;
+  });
+  if (cur) edits.push(cur);
+  return edits;
+}
+
+// Writes the current text back into the original .docx. mode "clean" applies
+// the changes; mode "tracked" records them as Word tracked changes.
+async function buildCorrectedDocx(b64, newText, mode) {
+  const { zip, xml, paras } = await readDocx(b64);
+  const texts = paras.map(paragraphText);
+  const starts = [];
+  let acc = 0;
+  texts.forEach((t) => { starts.push(acc); acc += t.length + 2; });
+  const edits = diffEdits(texts.join("\n\n"), newText);
+  const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  let nextId = 9000;
+  let skipped = 0;
+  const mark = (el) => { el.setAttributeNS(W_NS, "w:id", String(nextId++)); el.setAttributeNS(W_NS, "w:author", "Lead Desk"); el.setAttributeNS(W_NS, "w:date", stamp); return el; };
+
+  // One run per text piece, so any offset can become a run boundary.
+  const normalize = (p) => {
+    Array.from(p.getElementsByTagNameNS(W_NS, "r")).forEach((r) => {
+      if (closestW(r, "p") !== p || closestW(r, "del", p) || insideFallback(r)) return;
+      const rPr = Array.from(r.childNodes).find((c) => isW(c, "rPr"));
+      const kids = Array.from(r.childNodes).filter((c) => c !== rPr && c.nodeType === 1);
+      if (kids.length < 2) return;
+      kids.slice(1).reverse().forEach((c) => {
+        const nr = wEl(xml, "r");
+        if (rPr) nr.appendChild(rPr.cloneNode(true));
+        nr.appendChild(c);
+        r.parentNode.insertBefore(nr, r.nextSibling);
+      });
+    });
+  };
+  const splitAt = (p, pos) => {
+    const it = paragraphItems(p).find((x) => x.start < pos && pos < x.end && isW(x.node, "t"));
+    if (!it) return;
+    const clone = it.run.cloneNode(true);
+    const ct = Array.from(clone.childNodes).find((c) => isW(c, "t"));
+    it.node.textContent = it.text.slice(0, pos - it.start);
+    ct.textContent = it.text.slice(pos - it.start);
+    [it.node, ct].forEach((t) => t.setAttributeNS(XML_NS, "xml:space", "preserve"));
+    it.run.parentNode.insertBefore(clone, it.run.nextSibling);
+  };
+  const runsFor = (text, rPr) => {
+    const out = [];
+    text.split(/(\t|\n)/).forEach((part) => {
+      if (!part) return;
+      const r = wEl(xml, "r");
+      if (rPr) r.appendChild(rPr.cloneNode(true));
+      if (part === "\t") r.appendChild(wEl(xml, "tab"));
+      else if (part === "\n") r.appendChild(wEl(xml, "br"));
+      else { const t = wEl(xml, "t"); t.setAttributeNS(XML_NS, "xml:space", "preserve"); t.textContent = part; r.appendChild(t); }
+      out.push(r);
+    });
+    return out;
+  };
+  const rPrOf = (run) => run && Array.from(run.childNodes).find((c) => isW(c, "rPr"));
+  const wrapIns = (runs) => { if (mode !== "tracked" || !runs.length) return runs; const ins = mark(wEl(xml, "ins")); runs.forEach((r) => ins.appendChild(r)); return [ins]; };
+
+  // Replace [s, e) of one paragraph with text (no paragraph breaks in text).
+  const editParagraph = (p, s, e, text) => {
+    normalize(p);
+    splitAt(p, s);
+    splitAt(p, e);
+    const items = paragraphItems(p);
+    const doomed = items.filter((x) => x.start >= s && x.end <= e && x.end > x.start);
+    const before = items.filter((x) => x.end <= s).pop();
+    const after = items.find((x) => x.start >= e);
+    const styleRun = (doomed[0] || before || after || {}).run;
+    let parent, ref;
+    if (doomed.length) { const last = doomed[doomed.length - 1].run; parent = last.parentNode; ref = last.nextSibling; }
+    else if (before) { parent = before.run.parentNode; ref = before.run.nextSibling; }
+    else if (after) { parent = after.run.parentNode; ref = after.run; }
+    else { parent = p; ref = null; }
+    const added = text ? wrapIns(runsFor(text, rPrOf(styleRun))) : [];
+    added.forEach((n) => parent.insertBefore(n, ref));
+    doomed.forEach((x) => {
+      if (mode === "tracked") {
+        if (isW(x.node, "t")) {
+          const dt = wEl(xml, "delText");
+          dt.setAttributeNS(XML_NS, "xml:space", "preserve");
+          dt.textContent = x.node.textContent;
+          x.run.replaceChild(dt, x.node);
+        }
+        const del = mark(wEl(xml, "del"));
+        x.run.parentNode.insertBefore(del, x.run);
+        del.appendChild(x.run);
+      } else {
+        x.run.parentNode.removeChild(x.run);
+      }
+    });
+  };
+  // Apply from the end of the document backwards so earlier offsets stay valid.
+  edits.sort((x, y) => y.start - x.start).forEach((ed) => {
+    try {
+      let i = 0;
+      while (i + 1 < paras.length && starts[i + 1] <= ed.start) i++;
+      const end0 = starts[i] + texts[i].length;
+      let s = Math.min(ed.start, end0) - starts[i];
+      if (ed.end > end0) {
+        // Spans a paragraph break: remove the covered text paragraph by paragraph
+        // (paragraphs themselves are not merged).
+        for (let j = paras.length - 1; j > i; j--) {
+          const ps = starts[j], pe = ps + texts[j].length;
+          if (ed.end > ps) editParagraph(paras[j], 0, Math.min(ed.end, pe) - ps, "");
+        }
+        editParagraph(paras[i], s, texts[i].length, "");
+        if (ed.text.replace(/\n\n/g, "").trim()) newOrLocal(i, s, ed.text);
+        return;
+      }
+      const e = ed.end - starts[i];
+      editParagraph(paras[i], s, e, "");
+      newOrLocal(i, s, ed.text);
+    } catch (err) {
+      skipped++;
+    }
+  });
+
+  // Splits paragraph p at pos; the text after pos moves to a new paragraph
+  // (same paragraph style) placed right after p, which is returned.
+  function splitParagraph(p, pos) {
+    normalize(p);
+    splitAt(p, pos);
+    const q = wEl(xml, "p");
+    const pPr = Array.from(p.childNodes).find((c) => isW(c, "pPr"));
+    if (pPr) q.appendChild(pPr.cloneNode(true));
+    const first = paragraphItems(p).find((x) => x.start >= pos);
+    if (first) {
+      let top = first.run;
+      while (top.parentNode !== p) top = top.parentNode;
+      while (top) { const next = top.nextSibling; q.appendChild(top); top = next; }
+    }
+    p.parentNode.insertBefore(q, p.nextSibling);
+    return q;
+  }
+
+  function newOrLocal(i, pos, text) {
+    if (!text) return;
+    const parts = text.split("\n\n");
+    if (parts.length === 1) { editParagraph(paras[i], pos, pos, text); return; }
+    const p = paras[i];
+    const q = splitParagraph(p, pos);
+    if (parts[0]) editParagraph(p, pos, pos, parts[0]);
+    const pPr = Array.from(p.childNodes).find((c) => isW(c, "pPr"));
+    const styleItem = paragraphItems(p)[0] || paragraphItems(q)[0];
+    parts.slice(1, -1).forEach((part) => {
+      const np = wEl(xml, "p");
+      if (pPr) np.appendChild(pPr.cloneNode(true));
+      wrapIns(runsFor(part, rPrOf(styleItem && styleItem.run))).forEach((r) => np.appendChild(r));
+      q.parentNode.insertBefore(np, q);
+    });
+    const last = parts[parts.length - 1];
+    if (last) {
+      if (paragraphItems(q).length) editParagraph(q, 0, 0, last);
+      else wrapIns(runsFor(last, rPrOf(styleItem && styleItem.run))).forEach((r) => q.appendChild(r));
+    }
+  }
+
+  zip.file("word/document.xml", new XMLSerializer().serializeToString(xml));
+  const blob = await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  return { blob, changes: edits.length, skipped };
+}
+
 // ---- Document checker ------------------------------------------------------
 const DOC_ISSUE_TYPES = {
   spelling: { label: "Spelling", color: "#9C3B3B" },
@@ -1598,6 +1871,8 @@ function App() {
   const [docReport, setDocReport] = usePersisted("docReport", null);
   const [docId, setDocId] = usePersisted("docId", null);
   const [savedDocs, setSavedDocs] = usePersisted("savedDocs", []);
+  const [docFile, setDocFile] = usePersisted("docFile", null); // original .docx { name, b64 }
+  const [docDlMsg, setDocDlMsg] = useState("");
   const [docView, setDocView] = useState("review");
   const [docFilter, setDocFilter] = useState("all");
   const [docActive, setDocActive] = useState(null);
@@ -1632,12 +1907,20 @@ function App() {
     if (!docTitle) setDocTitle(file.name.replace(/\.[^.]+$/, ""));
     const reader = new FileReader();
     if (/\.docx$/i.test(file.name)) {
-      reader.onload = () => window.mammoth.extractRawText({ arrayBuffer: reader.result })
-        .then((r) => { setDocText(r.value.replace(/\n{3,}/g, "\n\n").trim()); setDocIssues([]); setDocReport(null); })
-        .catch(() => setDocError("Couldn't read that Word file — try pasting the text."));
-      reader.readAsArrayBuffer(file);
+      // Keep the original file so downloads can reuse its formatting.
+      reader.onload = async () => {
+        const b64 = String(reader.result).split(",")[1];
+        try {
+          const text = await docxToText(b64);
+          setDocFile({ name: file.name, b64 });
+          setDocText(text); setDocIssues([]); setDocReport(null); setDocDlMsg("");
+        } catch (e) {
+          setDocError("Couldn't read that Word file \u2014 try pasting the text.");
+        }
+      };
+      reader.readAsDataURL(file);
     } else if (/\.(txt|md)$/i.test(file.name) || file.type.startsWith("text/")) {
-      reader.onload = () => { setDocText(String(reader.result)); setDocIssues([]); setDocReport(null); };
+      reader.onload = () => { setDocFile(null); setDocText(String(reader.result)); setDocIssues([]); setDocReport(null); };
       reader.readAsText(file);
     } else if (/\.pdf$/i.test(file.name)) {
       reader.onload = async () => {
@@ -1647,7 +1930,7 @@ function App() {
             { type: "document", source: { type: "base64", media_type: "application/pdf", data: reader.result.split(",")[1] } },
             { type: "text", text: "Transcribe the full text of this document exactly as written, keeping paragraph breaks. Do not correct anything. Output only the text." },
           ], { max_tokens: 8000 });
-          setDocText(out); setDocIssues([]); setDocReport(null);
+          setDocFile(null); setDocText(out); setDocIssues([]); setDocReport(null);
         } catch (e) { setDocError(`Couldn't read that PDF (${e.message}).`); }
         finally { setDocBusy(""); }
       };
@@ -1733,22 +2016,38 @@ function App() {
   };
 
   const newDocument = () => {
-    setDocId(null); setDocTitle(""); setDocGoal(""); setDocText(""); setDocIssues([]); setDocLog([]); setDocReport(null); setDocError(""); setDocView("review");
+    setDocId(null); setDocTitle(""); setDocGoal(""); setDocText(""); setDocIssues([]); setDocLog([]); setDocReport(null); setDocError(""); setDocView("review"); setDocFile(null); setDocDlMsg("");
   };
   const openSavedDoc = (d) => {
     setDocId(d.id); setDocTitle(d.title || ""); setDocType(d.docType || "Business document"); setDocTone(d.tone || "Keep my tone"); setDocGoal(d.goal || "");
-    setDocText(d.text || ""); setDocIssues(d.issues || []); setDocLog(d.log || []); setDocReport(d.report || null); setDocView("review"); setDocError("");
+    setDocText(d.text || ""); setDocIssues(d.issues || []); setDocLog(d.log || []); setDocReport(d.report || null); setDocView("review"); setDocError(""); setDocFile(d.file || null); setDocDlMsg("");
   };
 
   // Keep the current document in the saved list (and so in the cloud) as it changes.
   useEffect(() => {
     if (!docId) return;
     const t = setTimeout(() => {
-      const entry = { id: docId, savedAt: docId, updatedAt: Date.now(), title: docTitle || "Untitled document", docType, tone: docTone, goal: docGoal, text: docText, issues: docIssues, log: docLog, report: docReport };
+      const entry = { id: docId, savedAt: docId, updatedAt: Date.now(), title: docTitle || "Untitled document", docType, tone: docTone, goal: docGoal, text: docText, issues: docIssues, log: docLog, report: docReport, file: docFile };
       setSavedDocs((l) => [entry, ...l.filter((x) => x.id !== docId)].slice(0, HISTORY_LIMIT));
     }, 800);
     return () => clearTimeout(t);
-  }, [docId, docTitle, docType, docTone, docGoal, docText, docIssues, docLog, docReport]);
+  }, [docId, docTitle, docType, docTone, docGoal, docText, docIssues, docLog, docReport, docFile]);
+
+  const downloadDocx = async (mode) => {
+    if (!docFile) return;
+    setDocDlMsg("Building your Word file...");
+    try {
+      const { blob, changes, skipped } = await buildCorrectedDocx(docFile.b64, docText, mode);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = docFile.name.replace(/\.docx$/i, "") + (mode === "tracked" ? "_tracked_changes.docx" : "_corrected.docx");
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      setDocDlMsg(skipped ? `Downloaded with ${changes - skipped} of ${changes} change(s); ${skipped} couldn't be placed in the original layout \u2014 fix those in Word.` : `Downloaded \u2014 ${changes} change(s) written into your original formatting${mode === "tracked" ? " as Word tracked changes" : ""}.`);
+    } catch (e) {
+      setDocDlMsg(`Couldn't build the Word file (${e.message}).`);
+    }
+  };
 
   const loadResumeFile = (file) => {
     if (!file) return;
@@ -1844,7 +2143,7 @@ function App() {
         setSavedPosts((l) => mergeById(l, c.savedPosts, gone));
         setSavedWeeks((l) => mergeById(l, c.savedWeeks, gone));
         setSavedReviews((l) => mergeById(l, c.savedReviews, gone));
-        setSavedDocs((l) => mergeById(l, c.savedDocs, gone));
+        setSavedDocs((l) => mergeById(l, c.savedDocs, gone).map((d) => (d.file ? d : { ...d, file: ((l.find((x) => x.id === d.id) || {}).file) || null })));
         setContentReady(true);
       })
       .catch((e) => { if (!cancelled) { setContentReady(false); setContentStatus(e.message); } });
@@ -1858,13 +2157,25 @@ function App() {
       fetch("/api/memory?doc=content", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "x-desk-key": syncKey },
-        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, savedDocs, deletedIds } }),
+        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, savedDocs: withinBudget(savedDocs), deletedIds } }),
       })
         .then(async (r) => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Sync failed (${r.status})`); } setContentStatus("saved"); })
         .catch((e) => setContentStatus(e.message));
     }, 1500);
     return () => clearTimeout(t);
   }, [savedPosts, savedWeeks, savedReviews, savedDocs, deletedIds, contentReady]);
+
+  // Original Word files are large; keep the cloud payload under the server's
+  // request limit by sending the newest files first and leaving out the rest.
+  function withinBudget(docs) {
+    let left = 3000000;
+    return docs.map((d) => {
+      if (!d.file) return d;
+      const size = d.file.b64.length;
+      if (size <= left) { left -= size; return d; }
+      return { ...d, file: null };
+    });
+  }
 
   const cloudBanner = (
     <div style={{ background: "#fff", border: `1px solid ${syncKey && contentStatus === "saved" ? SAFE : "#D8D0BC"}`, borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12.5, fontFamily: "'Courier New', monospace" }}>
@@ -2759,11 +3070,24 @@ function App() {
                   {docBusy === "reading" ? "Reading PDF..." : docBusy.startsWith("checking") ? `Checking${docBusy.slice(8)}...` : docReport ? "Re-check document" : "Check document"}
                 </button>
                 <button onClick={() => { copyText(docText); setDocCopied(true); setTimeout(() => setDocCopied(false), 1600); }} disabled={!docText} style={{ ...smallBtn(docCopied ? SAFE : "transparent", docCopied ? PAPER : INK, `1px solid ${docCopied ? SAFE : INK}`), padding: "9px 16px", fontSize: 13 }}>{docCopied ? "Copied" : "Copy text"}</button>
-                <button onClick={() => downloadDocPdf(docTitle, docText)} disabled={!docText} style={{ ...smallBtn("transparent", INK, `1px solid ${INK}`), padding: "9px 16px", fontSize: 13 }}>Download PDF</button>
+                {docFile && (
+                  <>
+                    <button onClick={() => downloadDocx("clean")} disabled={!docText} style={{ ...smallBtn(SAFE, PAPER), padding: "9px 16px", fontSize: 13 }}>Download Word (corrected)</button>
+                    <button onClick={() => downloadDocx("tracked")} disabled={!docText} style={{ ...smallBtn(BRASS, PAPER), padding: "9px 16px", fontSize: 13 }}>Download Word (tracked changes)</button>
+                  </>
+                )}
+                <button onClick={() => downloadDocPdf(docTitle, docText)} disabled={!docText} style={{ ...smallBtn("transparent", INK, `1px solid ${INK}`), padding: "9px 16px", fontSize: 13 }}>Download PDF{docFile ? " (plain)" : ""}</button>
                 <button onClick={newDocument} style={{ ...smallBtn("transparent", "#8A8272", "1px solid #D8D0BC"), padding: "9px 16px", fontSize: 13 }}>New document</button>
               </div>
 
               {docError && <p style={{ color: RISK, fontSize: 12, fontFamily: "'Courier New', monospace" }}>{docError}</p>}
+              {docFile ? (
+                <p style={{ color: docDlMsg && /couldn|Couldn/.test(docDlMsg) ? RISK : "#5A5142", fontSize: 12, fontFamily: "'Courier New', monospace", marginTop: -6 }}>
+                  {docDlMsg || `Word file kept: ${docFile.name} \u2014 Word downloads keep its fonts, styles, tables and layout.`}
+                </p>
+              ) : docText ? (
+                <p style={{ color: "#8A8272", fontSize: 12, fontFamily: "'Courier New', monospace", marginTop: -6 }}>Upload a .docx to download corrections in your original Word formatting.</p>
+              ) : null}
 
               {docReport && (
                 <div style={{ padding: "14px 16px", borderRadius: 6, background: INK, marginBottom: 14, display: "flex", gap: 16, flexWrap: "wrap" }}>
