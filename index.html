@@ -1483,6 +1483,15 @@ function App() {
   const [savedPosts, setSavedPosts] = usePersisted("savedPosts", []);
   const [deletedIds, setDeletedIds] = usePersisted("deletedIds", []);
   const forget = (id) => setDeletedIds((d) => [...d, id].slice(-500));
+  // Threads: folders of finished posts, captions and bulletins.
+  const [savedThreads, setSavedThreads] = usePersisted("savedThreads", []);
+  const [threadView, setThreadView] = useState(null); // null = generator, "list", or a thread id
+  const [threadFilter, setThreadFilter] = useState("all");
+  const [activeThreadId, setActiveThreadId] = useState(null); // new content auto-saves here
+  const [threadPick, setThreadPick] = useState("");
+  const [threadNewTitle, setThreadNewTitle] = useState("");
+  const [threadCopied, setThreadCopied] = useState(null);
+  const [lastThreadId, setLastThreadId] = useState(null);
   const [wkCopied, setWkCopied] = useState(null);
 
   const resetWeek = () => { setWkPlan(null); setWkPosts({}); setWkNotes({}); setWkId(null); setWkBusy({}); setWkError(""); };
@@ -1620,7 +1629,9 @@ function App() {
       const id = Date.now();
       result._id = id;
       setPostResult(result);
-      setSavedPosts((list) => [{ id, savedAt: id, updatedAt: id, task: postTask, niche: postNiche, result }, ...list].slice(0, HISTORY_LIMIT * 4));
+      const tid = activeThreadId && savedThreads.some((t) => t.id === activeThreadId) ? activeThreadId : null;
+      if (tid) setSavedThreads((l) => l.map((t) => (t.id === tid ? { ...t, updatedAt: id } : t)));
+      setSavedPosts((list) => [{ id, savedAt: id, updatedAt: id, task: postTask, captionType: postCaptionType, niche: postNiche, threadId: tid, used: false, result }, ...list].slice(0, HISTORY_LIMIT * 4));
     } catch (e) {
       setPostError("Couldn't generate that \u2014 check connection and try again.");
     } finally {
@@ -2147,6 +2158,53 @@ function App() {
     setPostError("");
   };
 
+  // ---- Threads ----
+  const itemKind = (x) => (x.task === "caption" ? (/newsletter/i.test(x.captionType || "") ? "bulletin" : "caption") : "post");
+  const KIND_LABEL = { post: "Post", caption: "Caption", bulletin: "Bulletin" };
+  const threadItems = (tid) => savedPosts.filter((x) => x.threadId === tid);
+  const threadCounts = (tid) => {
+    const items = threadItems(tid);
+    const c = { post: 0, caption: 0, bulletin: 0, unused: 0, total: items.length };
+    items.forEach((x) => { c[itemKind(x)]++; if (!x.used) c.unused++; });
+    return c;
+  };
+  const touchThread = (tid) => setSavedThreads((l) => l.map((t) => (t.id === tid ? { ...t, updatedAt: Date.now() } : t)));
+  const saveResultToThread = () => {
+    if (!postResult) return;
+    let tid = threadPick === "new" || !threadPick ? null : Number(threadPick);
+    if (!tid) {
+      const title = threadNewTitle.trim() || (postResult.rewritten || "").split("\n")[0].slice(0, 60) || "Untitled thread";
+      tid = Date.now();
+      setSavedThreads((l) => [{ id: tid, savedAt: tid, updatedAt: tid, title, niche: postNiche, keywords: postKeywords }, ...l]);
+    } else touchThread(tid);
+    setSavedPosts((list) => list.map((x) => (x.id === postResult._id ? { ...x, threadId: tid, updatedAt: Date.now() } : x)));
+    setActiveThreadId(tid);
+    setThreadNewTitle("");
+  };
+  const setItemUsed = (id, used) => setSavedPosts((list) => list.map((x) => (x.id === id ? { ...x, used, updatedAt: Date.now() } : x)));
+  const removeFromThread = (id) => setSavedPosts((list) => list.map((x) => (x.id === id ? { ...x, threadId: null, updatedAt: Date.now() } : x)));
+  const deleteThread = (tid) => {
+    setSavedPosts((list) => list.map((x) => (x.threadId === tid ? { ...x, threadId: null, updatedAt: Date.now() } : x)));
+    setSavedThreads((l) => l.filter((t) => t.id !== tid)); forget(tid);
+    if (activeThreadId === tid) setActiveThreadId(null);
+    setThreadView("list");
+  };
+  const copyThreadItem = (x) => {
+    navigator.clipboard && navigator.clipboard.writeText((x.result && x.result.rewritten) || "");
+    setThreadCopied(x.id); setTimeout(() => setThreadCopied(null), 1400);
+  };
+  const addContentToThread = (t) => {
+    if (t.niche) setPostNiche(t.niche);
+    if (t.keywords) setPostKeywords(t.keywords);
+    setActiveThreadId(t.id); setPostResult(null); setThreadView(null);
+  };
+  useEffect(() => {
+    if (!threadView) return;
+    const onKey = (e) => { if (e.key === "Escape" && typeof threadView === "number") { setLastThreadId(threadView); setThreadView("list"); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [threadView]);
+
   // ---- Cloud sync for posts, weeks and reviews (Supabase via /api/memory?doc=content) ----
   // Uses the same passcode as Memory. On connect, cloud and device copies are
   // merged (nothing is dropped); after that every change is saved back.
@@ -2165,6 +2223,7 @@ function App() {
         setDeletedIds(gone);
         setSavedPosts((l) => mergeById(l, c.savedPosts, gone));
         setSavedWeeks((l) => mergeById(l, c.savedWeeks, gone));
+        setSavedThreads((l) => mergeById(l, c.savedThreads, gone));
         setSavedReviews((l) => mergeById(l, c.savedReviews, gone));
         setSavedDocs((l) => mergeById(l, c.savedDocs, gone).map((d) => (d.file ? d : { ...d, file: ((l.find((x) => x.id === d.id) || {}).file) || null })));
         setContentReady(true);
@@ -2180,13 +2239,13 @@ function App() {
       fetch("/api/memory?doc=content", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "x-desk-key": syncKey },
-        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, savedDocs: withinBudget(savedDocs), deletedIds } }),
+        body: JSON.stringify({ data: { savedPosts, savedWeeks, savedReviews, savedDocs: withinBudget(savedDocs), savedThreads, deletedIds } }),
       })
         .then(async (r) => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Sync failed (${r.status})`); } setContentStatus("saved"); })
         .catch((e) => setContentStatus(e.message));
     }, 1500);
     return () => clearTimeout(t);
-  }, [savedPosts, savedWeeks, savedReviews, savedDocs, deletedIds, contentReady]);
+  }, [savedPosts, savedWeeks, savedReviews, savedDocs, savedThreads, deletedIds, contentReady]);
 
   // Original Word files are large; keep the cloud payload under the server's
   // request limit by sending the newest files first and leaving out the rest.
@@ -2226,6 +2285,10 @@ function App() {
   };
 
   const selectStyle = { width: "100%", padding: "9px 10px", borderRadius: 4, border: "1px solid #D8D0BC", fontSize: 14, background: "#fff", color: INK };
+  const pillStyle = { fontFamily: "'Courier New', monospace", fontSize: 12, color: INK, background: "#EEE8DA", borderRadius: 4, padding: "3px 8px" };
+  const statusStyle = { fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "3px 8px", borderRadius: 4 };
+  const backBtnStyle = { fontFamily: "'Courier New', monospace", fontSize: 13, fontWeight: 700, color: "#6F5520", background: "none", border: "none", cursor: "pointer", padding: "6px 0" };
+  const linkBtnStyle = { fontFamily: "'Courier New', monospace", fontSize: 12, fontWeight: 700, color: "#6F5520", background: "none", border: "none", cursor: "pointer", padding: 0 };
   const labelStyle = { fontSize: 12, fontFamily: "'Courier New', monospace", color: "#5A5142", display: "block", marginBottom: 4, letterSpacing: 0.3 };
 
   return (
@@ -2654,6 +2717,122 @@ function App() {
 
           {tab === "posts" && (
             <div>
+              <div style={{ display: "flex", gap: 4, background: "#EEE8DA", borderRadius: 6, padding: 3, marginBottom: 18, maxWidth: 360 }}>
+                {[{ id: null, label: "Generator" }, { id: "list", label: `Threads (${savedThreads.length})` }].map((v) => {
+                  const on = v.id === null ? !threadView : !!threadView;
+                  return (
+                    <button key={v.label} onClick={() => setThreadView(v.id)} aria-pressed={on} style={{
+                      flex: 1, padding: "8px 10px", border: "none", borderRadius: 4, cursor: "pointer",
+                      fontFamily: "'Courier New', monospace", fontSize: 12, fontWeight: on ? 700 : 400,
+                      background: on ? "#FBF9F4" : "transparent", color: on ? INK : "#5A5142",
+                      boxShadow: on ? `inset 0 -2px 0 ${BRASS}` : "none",
+                    }}>{v.label}</button>
+                  );
+                })}
+              </div>
+
+              {threadView === "list" && (
+                <div>
+                  <div style={{ fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#6F5520", marginBottom: 8 }}>THREADS &middot; {savedThreads.length}</div>
+                  {savedThreads.length === 0 ? (
+                    <div style={{ background: "#EEE8DA", borderRadius: 6, padding: 20, fontSize: 14, color: "#5A5142" }}>
+                      No threads yet. Generate a post, caption or bulletin, then use <b>Save to thread</b> under the result to start one.
+                    </div>
+                  ) : (
+                    <div style={{ background: "#FBF9F4", border: "1px solid #D8D0BC", borderRadius: 6 }}>
+                      {[...savedThreads].sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id)).map((t, i) => {
+                        const c = threadCounts(t.id);
+                        return (
+                          <button key={t.id} onClick={() => { setThreadFilter("all"); setThreadView(t.id); }} style={{
+                            display: "block", width: "100%", textAlign: "left", cursor: "pointer", border: "none",
+                            borderTop: i ? "1px solid #D8D0BC" : "none", padding: "12px 16px", color: INK, fontFamily: "inherit",
+                            background: lastThreadId === t.id ? "#EEE8DA" : "transparent",
+                            boxShadow: lastThreadId === t.id ? `inset 3px 0 0 ${BRASS}` : "none",
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                              <span style={{ fontWeight: 700, fontSize: 15 }}>{t.title}</span>
+                              <span style={{ fontFamily: "'Courier New', monospace", fontSize: 12, color: "#5A5142", whiteSpace: "nowrap" }}>{formatSavedAt(t.updatedAt || t.savedAt)}</span>
+                            </div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                              {c.total === 0 && <span style={pillStyle}>empty</span>}
+                              {c.post > 0 && <span style={pillStyle}><b>{c.post}</b> post{c.post > 1 ? "s" : ""}</span>}
+                              {c.caption > 0 && <span style={pillStyle}><b>{c.caption}</b> caption{c.caption > 1 ? "s" : ""}</span>}
+                              {c.bulletin > 0 && <span style={pillStyle}><b>{c.bulletin}</b> bulletin{c.bulletin > 1 ? "s" : ""}</span>}
+                              {c.total > 0 && (c.unused > 0
+                                ? <span style={{ ...statusStyle, background: "#F3E3B8", color: "#6F5520" }}>{c.unused} unused</span>
+                                : <span style={{ ...statusStyle, color: SAFE, border: `1px solid ${SAFE}` }}>all used</span>)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {typeof threadView === "number" && (() => {
+                const t = savedThreads.find((x) => x.id === threadView);
+                if (!t) return <button onClick={() => setThreadView("list")} style={backBtnStyle}>&larr; Threads</button>;
+                const c = threadCounts(t.id);
+                const items = threadItems(t.id)
+                  .filter((x) => threadFilter === "all" || (threadFilter === "unused" ? !x.used : itemKind(x) === threadFilter))
+                  .sort((a, b) => (!!a.used === !!b.used ? b.id - a.id : a.used ? 1 : -1));
+                const filters = [["all", "All", c.total], ["post", "Posts", c.post], ["caption", "Captions", c.caption], ["bulletin", "Bulletins", c.bulletin], ["unused", "Unused", c.unused]];
+                return (
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", paddingBottom: 12, borderBottom: "1px solid #D8D0BC", marginBottom: 12 }}>
+                      <button onClick={() => { setLastThreadId(t.id); setThreadView("list"); }} style={backBtnStyle}>&larr; Threads</button>
+                      <h2 style={{ flex: 1, margin: 0, fontSize: 20, minWidth: 180 }}>{t.title}</h2>
+                      <button onClick={() => addContentToThread(t)} style={{ padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Add content</button>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                      {filters.map(([id, label, n]) => (
+                        <button key={id} onClick={() => setThreadFilter(id)} aria-pressed={threadFilter === id} style={{
+                          fontFamily: "'Courier New', monospace", fontSize: 12, borderRadius: 999, padding: "5px 12px", cursor: "pointer",
+                          border: `1px solid ${threadFilter === id ? INK : "#8A8272"}`, background: threadFilter === id ? INK : "transparent", color: threadFilter === id ? PAPER : "#5A5142",
+                        }}>{label} {n}</button>
+                      ))}
+                    </div>
+                    {items.length === 0 && (
+                      <div style={{ background: "#EEE8DA", borderRadius: 6, padding: 20, fontSize: 14, color: "#5A5142" }}>
+                        {c.total === 0 ? "Nothing in this thread yet. Use Add content to generate something for it." : "Nothing matches this filter."}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {items.map((x) => (
+                        <div key={x.id} style={{ background: "#FBF9F4", border: "1px solid #D8D0BC", borderRadius: 6, padding: "12px 16px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                            <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6F5520", textTransform: "uppercase" }}>
+                              {KIND_LABEL[itemKind(x)]}{x.result && x.result.format ? ` \u00b7 ${x.result.format}` : ""} &middot; {formatSavedAt(x.savedAt)}
+                            </span>
+                            {x.used
+                              ? <span style={{ ...statusStyle, color: SAFE, border: `1px solid ${SAFE}` }}>Used</span>
+                              : <span style={{ ...statusStyle, background: "#F3E3B8", color: "#6F5520" }}>Unused</span>}
+                          </div>
+                          <div style={{ fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif", fontSize: 14, lineHeight: "21px", marginTop: 8, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap" }}>
+                            {(x.result && x.result.rewritten) || ""}
+                          </div>
+                          <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap" }}>
+                            <button onClick={() => copyThreadItem(x)} style={linkBtnStyle}>{threadCopied === x.id ? "Copied" : "Copy"}</button>
+                            <button onClick={() => { openSavedPost(x); setActiveThreadId(t.id); setThreadView(null); }} style={linkBtnStyle}>Open</button>
+                            <button onClick={() => setItemUsed(x.id, !x.used)} style={linkBtnStyle}>{x.used ? "Mark unused" : "Mark used"}</button>
+                            <button onClick={() => removeFromThread(x.id)} style={{ ...linkBtnStyle, color: "#5A5142" }}>Remove</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => { if (window.confirm(`Delete the thread "${t.title}"? Its content stays in My posts.`)) deleteThread(t.id); }} style={{ ...linkBtnStyle, color: RISK, marginTop: 18 }}>Delete thread</button>
+                  </div>
+                );
+              })()}
+
+              <div style={{ display: threadView ? "none" : "block" }}>
+              {activeThreadId && savedThreads.some((t) => t.id === activeThreadId) && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: "#F3E3B8", color: "#6F5520", borderRadius: 6, padding: "8px 14px", marginBottom: 14, fontFamily: "'Courier New', monospace", fontSize: 12 }}>
+                  <span>New content saves to thread: <b>{savedThreads.find((t) => t.id === activeThreadId).title}</b></span>
+                  <button onClick={() => setActiveThreadId(null)} style={{ ...linkBtnStyle, color: "#6F5520" }}>Stop</button>
+                </div>
+              )}
               <p style={{ fontSize: 13, color: "#5A5142", marginTop: 0, marginBottom: 18, fontFamily: "'Courier New', monospace" }}>
                 Rewrite a proven post into your niche, or build a new one from a client win or photo.
               </p>
@@ -2887,6 +3066,27 @@ function App() {
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
 
+                    {(() => {
+                      const cur = savedPosts.find((x) => x.id === postResult._id);
+                      if (!cur) return null;
+                      const inThread = cur.threadId && savedThreads.find((t) => t.id === cur.threadId);
+                      if (inThread) return (
+                        <div style={{ marginTop: 12, fontFamily: "'Courier New', monospace", fontSize: 12, color: SAFE }}>
+                          Saved to thread <b>{inThread.title}</b> &middot; <button onClick={() => { setLastThreadId(inThread.id); setThreadFilter("all"); setThreadView(inThread.id); }} style={linkBtnStyle}>Open thread</button>
+                        </div>
+                      );
+                      return (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 12, padding: 12, background: "#EEE8DA", borderRadius: 6 }}>
+                          <select value={threadPick} onChange={(e) => setThreadPick(e.target.value)} style={{ ...selectStyle, width: "auto", flex: "1 1 180px" }}>
+                            <option value="">+ New thread</option>
+                            {savedThreads.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+                          </select>
+                          {!threadPick && <input value={threadNewTitle} onChange={(e) => setThreadNewTitle(e.target.value)} placeholder="Thread name (optional)" style={{ ...selectStyle, width: "auto", flex: "1 1 180px" }} />}
+                          <button onClick={saveResultToThread} style={{ padding: "9px 16px", background: INK, color: PAPER, border: "none", borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Save to thread</button>
+                        </div>
+                      );
+                    })()}
+
                     <div style={{ marginTop: 14 }}>
                       <label style={labelStyle}>{postTask === "caption" ? "TELL THE AI HOW TO CHANGE OPTION 1" : "TELL THE AI HOW TO CHANGE THIS POST"}</label>
                       <textarea
@@ -3023,6 +3223,7 @@ function App() {
                   </div>
                 </div>
               )}
+              </div>
             </div>
           )}
 
