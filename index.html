@@ -1602,6 +1602,29 @@ function App() {
   }, [savedWeeks]);
   const pickedPost = savedPostOptions.find((o) => o.key === postSavedKey) || null;
 
+  // Captions written straight from the post on screen (no trip to the caption tab).
+  const [quickCaps, setQuickCaps] = useState(null); // { forId, options, loading, error, open, copied }
+  const runQuickCaptions = async () => {
+    if (!postResult) return;
+    const forId = postResult._id;
+    const post = savedPosts.find((x) => x.id === forId);
+    setQuickCaps({ forId, options: [], loading: true, error: "", open: 0, copied: null });
+    try {
+      const result = await generatePostFromClaude({
+        task: "caption", niche: postNiche, keywords: postKeywords, captionType: postCaptionType,
+        sourceText: `This is the full text of the LinkedIn post the caption is for. Write captions that frame and promote it, not a copy of it:\n${postResult.rewritten}`,
+        contextNote: "", imageBase64: null, imageMediaType: null,
+      });
+      const options = [result.rewritten, ...(result.alternatives || [])].filter(Boolean).slice(0, 3);
+      setQuickCaps({ forId, options, loading: false, error: "", open: 0, copied: null });
+      const id = Date.now();
+      setSavedPosts((list) => [{ id, savedAt: id, updatedAt: id, task: "caption", captionType: postCaptionType, niche: postNiche, threadId: (post && post.threadId) || null, used: false, captionFor: forId, result: { ...result, _id: id } }, ...list].slice(0, HISTORY_LIMIT * 4));
+    } catch (e) {
+      setQuickCaps({ forId, options: [], loading: false, error: "Couldn't write captions. Check connection and try again.", open: 0, copied: null });
+    }
+  };
+  const updateQuickCap = (k, v) => setQuickCaps((q) => ({ ...q, options: q.options.map((o, j) => (j === k ? v : o)) }));
+
   const runPostGenerate = async () => {
     const hasInput = postSourceMode === "text" ? !!postSourceText.trim() : postSourceMode === "saved" ? !!pickedPost : !!postImageBase64;
     if (!hasInput) {
@@ -3065,6 +3088,59 @@ function App() {
                       marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "transparent", color: INK,
                       border: `1px solid ${INK}`, borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, cursor: "pointer",
                     }}>Regenerate</button>
+                    {postTask !== "caption" && (
+                      <button onClick={runQuickCaptions} disabled={quickCaps && quickCaps.loading} style={{
+                        marginTop: 12, marginLeft: 10, padding: "9px 16px", background: "#6F5520", color: "#fff", border: "none",
+                        borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                        opacity: quickCaps && quickCaps.loading ? 0.6 : 1,
+                      }}>{quickCaps && quickCaps.loading && quickCaps.forId === postResult._id ? "Writing captions..." : "Write caption"}</button>
+                    )}
+
+                    {postTask !== "caption" && quickCaps && quickCaps.forId === postResult._id && (
+                      <div style={{ marginTop: 14, padding: 14, background: "#EEE8DA", borderRadius: 6 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#6F5520" }}>CAPTIONS FOR THIS POST</span>
+                          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <select value={postCaptionType} onChange={(e) => setPostCaptionType(e.target.value)} style={{ ...selectStyle, width: "auto", padding: "6px 8px", fontSize: 12 }}>
+                              <option value="newsletter edition">Newsletter edition</option>
+                              <option value="article">Article</option>
+                              <option value="image or graphic post">Image / graphic post</option>
+                              <option value="carousel / document post">Carousel / document post</option>
+                              <option value="video post">Video post</option>
+                            </select>
+                            <button onClick={runQuickCaptions} disabled={quickCaps.loading} style={linkBtnStyle}>Rewrite</button>
+                            <button onClick={() => setQuickCaps(null)} style={{ ...linkBtnStyle, color: "#5A5142" }}>Close</button>
+                          </span>
+                        </div>
+                        {quickCaps.loading && <div style={{ fontFamily: "'Courier New', monospace", fontSize: 12, color: "#5A5142" }}>Writing three captions...</div>}
+                        {quickCaps.error && <div style={{ fontFamily: "'Courier New', monospace", fontSize: 12, color: RISK }}>{quickCaps.error}</div>}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {quickCaps.options.map((cap, k) => {
+                            const isOpen = quickCaps.open === k;
+                            return (
+                              <div key={k} style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6 }}>
+                                <button onClick={() => setQuickCaps((q) => ({ ...q, open: isOpen ? null : k }))} aria-expanded={isOpen} style={{
+                                  display: "flex", width: "100%", gap: 10, alignItems: "center", textAlign: "left", background: "none", border: "none",
+                                  padding: "10px 14px", cursor: "pointer", color: INK, fontFamily: "inherit",
+                                }}>
+                                  <span style={{ fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, color: "#6F5520", whiteSpace: "nowrap" }}>{isOpen ? "\u25BE" : "\u25B8"} OPTION {k + 1}</span>
+                                  {!isOpen && <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#5A5142", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cap.split("\n")[0]}</span>}
+                                </button>
+                                {isOpen && (
+                                  <div style={{ padding: "0 14px 12px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6 }}>
+                                    <EditableText aiNiche={postNiche} aiKind="LinkedIn caption" value={cap} onChange={(v) => updateQuickCap(k, v)} />
+                                    <button onClick={() => { copyText(cap); setQuickCaps((q) => ({ ...q, copied: k })); setTimeout(() => setQuickCaps((q) => (q ? { ...q, copied: null } : q)), 1600); }} style={{
+                                      marginTop: 8, padding: "7px 14px", background: quickCaps.copied === k ? SAFE : INK, color: PAPER, border: "none",
+                                      borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
+                                    }}>{quickCaps.copied === k ? "Copied" : "Copy caption"}</button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {(() => {
                       const cur = savedPosts.find((x) => x.id === postResult._id);
@@ -3103,16 +3179,16 @@ function App() {
                   </div>
 
                   {(postResult.alternatives || []).map((alt, k) => (
-                    <div key={k} style={{ marginTop: 14 }}>
-                      <div style={{ background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "18px 18px 16px", whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
-                        <div style={{ marginBottom: 10, color: "#8A8272", fontFamily: "'Courier New', monospace", fontSize: 11 }}>CAPTION &mdash; OPTION {k + 2} &middot; CLICK TO EDIT</div>
+                    <details key={k} style={{ marginTop: 14, background: "#fff", border: "1px solid #D8D0BC", borderRadius: 6, padding: "10px 14px" }}>
+                      <summary style={{ cursor: "pointer", fontFamily: "'Courier New', monospace", fontSize: 11, fontWeight: 700, color: "#6F5520" }}>CAPTION &mdash; OPTION {k + 2} <span style={{ fontWeight: 400, color: "#5A5142", fontFamily: "inherit" }}>&middot; {alt.split("\n")[0].slice(0, 70)}</span></summary>
+                      <div style={{ marginTop: 8, whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: INK }}>
                         <EditableText aiNiche={postNiche} aiKind="LinkedIn caption" value={alt} onChange={(v) => setPostResult({ ...postResult, alternatives: postResult.alternatives.map((a, j) => (j === k ? v : a)) })} />
                       </div>
                       <button onClick={() => { copyText(alt); setPostCopiedAlt(k); setTimeout(() => setPostCopiedAlt(null), 1600); }} style={{
                         marginTop: 8, padding: "7px 14px", background: postCopiedAlt === k ? SAFE : INK, color: PAPER, border: "none",
                         borderRadius: 6, fontFamily: "'Courier New', monospace", fontSize: 12, cursor: "pointer",
                       }}>{postCopiedAlt === k ? "Copied" : "Copy caption"}</button>
-                    </div>
+                    </details>
                   ))}
 
                   {postTask !== "caption" && (
